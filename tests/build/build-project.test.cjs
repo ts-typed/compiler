@@ -276,3 +276,128 @@ test('TS_TYPED_BUILD_METRICS=1 attaches per-stage timing to the report and print
   assert.match(printedLines[0], /TypeSafe Build Performance/);
   assert.match(printedLines[0], /Total/);
 });
+
+const DECORATED_SOURCE = [
+  "import { StrictTypeError } from '@ts-typed/compiler';",
+  'function tag(target: object, key: string): void { void target; void key; }',
+  'class Person { @tag name = "Ada"; }',
+  'const person: Person = new Person();',
+  'process.stdout.write(person.name);',
+].join('\n');
+
+// Behavior change: a decorator no longer makes a member unsupported. A decorated
+// field whose type is supported is resolved and guarded like any other field,
+// so it must NOT produce the old "Decorated members" warning.
+test('a decorated field with a supported type produces no unsupported warning', async () => {
+  const projectRoot = writeProject(DECORATED_SOURCE);
+  const config = baseConfig(projectRoot);
+
+  const report = await buildProject(config);
+
+  assert.equal(report.success, true, report.errors.join('\n'));
+  const warning = report.coverage.warnings.find((entry) => entry.name === 'name');
+  assert.equal(warning, undefined, JSON.stringify(report.coverage.warnings));
+});
+
+// A decorated member whose TYPE is genuinely unsupported (a callable, since Date is now a supported leaf) still fails
+// under onUnsupported=error, so decorators did not silently disable the check.
+const DECORATED_UNSUPPORTED_SOURCE = [
+  "import { StrictTypeError } from '@ts-typed/compiler';",
+  'function tag(target: object, key: string): void { void target; void key; }',
+  'class Event { @tag when: () => number = () => 0; }',
+  'const event: Event = new Event();',
+  'process.stdout.write(String(event.when()));',
+].join('\n');
+
+test('compiler.onUnsupported=error still fails a decorated member whose type is unsupported', async () => {
+  const projectRoot = writeProject(DECORATED_UNSUPPORTED_SOURCE);
+  const config = baseConfig(projectRoot, {
+    compiler: { sourceMap: false, onUnsupported: 'error', strictClass: false },
+  });
+
+  const report = await buildProject(config);
+
+  assert.equal(report.success, false);
+  assert.equal(report.errors.length, 1);
+  assert.match(report.errors[0], /main\.ts:3:\d+ warning TT_UNSUPPORTED_TYPE: when /);
+});
+
+function enablePathAliases(projectRoot) {
+  writeFileSync(
+    join(projectRoot, 'tsconfig.json'),
+    JSON.stringify({
+      compilerOptions: {
+        strict: true,
+        target: 'ES2022',
+        module: 'CommonJS',
+        moduleResolution: 'Node',
+        rootDir: './src',
+        outDir: './staging-ignored',
+        baseUrl: '.',
+        paths: { '@app/*': ['src/*'] },
+        experimentalDecorators: true,
+        emitDecoratorMetadata: true,
+        skipLibCheck: true,
+      },
+      include: ['src/**/*.ts'],
+    }),
+  );
+  writeFileSync(join(projectRoot, 'src/util.ts'), 'export const greeting = "aliased";\n');
+}
+
+const ALIAS_MAIN_SOURCE = [
+  "import { greeting } from '@app/util';",
+  "process.stdout.write(greeting);",
+].join('\n');
+
+const NCC_ENABLED = {
+  enabled: true,
+  minify: false,
+  sourceMap: false,
+  sourceMapRegister: false,
+  target: 'es2022',
+  externals: [],
+  cache: false,
+  license: null,
+  quiet: true,
+  debugLog: false,
+};
+
+test('a project with tsconfig "paths" fails the build when the bundle (ncc) is disabled', async () => {
+  const projectRoot = writeProject(ALIAS_MAIN_SOURCE);
+  enablePathAliases(projectRoot);
+  const config = baseConfig(projectRoot);
+
+  const report = await buildProject(config);
+
+  assert.equal(report.success, false);
+  assert.equal(report.bundled, false);
+  assert.equal(report.errors.length, 1);
+  assert.match(report.errors[0], /"paths"/);
+  assert.match(report.errors[0], /tsconfig-paths/);
+  assert.equal(existsSync(join(config.outDir, 'main.js')), false);
+});
+
+test('a project with tsconfig "paths" also fails the build when the bundle (ncc) is enabled, because ncc does not read tsconfig "paths" either', async () => {
+  const projectRoot = writeProject(MAIN_SOURCE);
+  enablePathAliases(projectRoot);
+  const config = baseConfig(projectRoot, { ncc: NCC_ENABLED });
+
+  const report = await buildProject(config);
+
+  assert.equal(report.success, false);
+  assert.equal(report.errors.length, 1);
+  assert.match(report.errors[0], /"paths"/);
+  assert.match(report.errors[0], /ncc-bundled output/);
+});
+
+test('a project without tsconfig "paths" still builds when the bundle (ncc) is disabled', async () => {
+  const projectRoot = writeProject(MAIN_SOURCE);
+  const config = baseConfig(projectRoot);
+
+  const report = await buildProject(config);
+
+  assert.equal(report.success, true, report.errors.join('\n'));
+  assert.equal(report.bundled, false);
+  assert.equal(runEntry(config.outDir).stdout, 'Ada:30');
+});

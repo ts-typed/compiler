@@ -17,6 +17,13 @@ import type { BuildAssetReport, BuildReport } from './build-report.interface';
 
 const RUNTIME_PACKAGE = '@ts-typed/compiler';
 
+const PATH_ALIASES_ERROR =
+  'This project configures "paths" in tsconfig.json (e.g. module aliases), which TypeScript never rewrites in its ' +
+  'own emitted JavaScript: any import/require written through an alias would fail at runtime with "Cannot find ' +
+  'module", in both the unbundled and the ncc-bundled output (@vercel/ncc does not read tsconfig "paths" either). ' +
+  'Resolve the aliases before they reach ts-typed: use a runtime resolver such as tsconfig-paths, or remove the ' +
+  '"paths" aliases (e.g. by rewriting imports to relative paths) and build again.';
+
 interface EmitFileRecord {
   readonly relativePath: string;
 }
@@ -40,6 +47,14 @@ export async function buildProject(config: ProjectConfig): Promise<BuildReport> 
     return failure(config.outDir, [
       ...analysis.tsDiagnostics.map((diagnostic) => formatTsDiagnostic(analysis.typescript, diagnostic)),
     ]);
+  }
+
+  // TypeScript never rewrites path aliases in the JavaScript it emits, so a
+  // project that uses "paths" would report success while failing at runtime
+  // with "Cannot find module" — in both the unbundled output AND the
+  // ncc-bundled one, since @vercel/ncc does not read tsconfig "paths" either.
+  if (hasPathAliases(analysis.program.getCompilerOptions())) {
+    return failure(config.outDir, [PATH_ALIASES_ERROR]);
   }
 
   const entrySourceFile = analysis.program.getSourceFile(resolve(config.entry));
@@ -113,7 +128,10 @@ export async function buildProject(config: ProjectConfig): Promise<BuildReport> 
       return failure(config.outDir, ['Emit was skipped by the TypeScript compiler.']);
     }
 
-    const coverage = createCoverageReport(analysis.coverage, transformDiagnostics);
+    // Analysis-time diagnostics cover contracts that have no schema to
+    // transform (e.g. decorated or private members), so they must be merged
+    // with the transform-time ones or those warnings are silently dropped.
+    const coverage = createCoverageReport(analysis.coverage, [...analysis.diagnostics, ...transformDiagnostics]);
     const mustFailOnUnsupported =
       config.compiler.onUnsupported === 'error' &&
       coverage.items.some((item) => item.status === 'unsupported');
@@ -216,6 +234,10 @@ function resolveIntegrationConfig(config: ProjectConfig): ProjectConfig {
     ...config,
     tsconfig: project.configPath ?? config.tsconfig,
   };
+}
+
+function hasPathAliases(compilerOptions: ts.CompilerOptions): boolean {
+  return Object.keys(compilerOptions.paths ?? {}).length > 0;
 }
 
 function failure(

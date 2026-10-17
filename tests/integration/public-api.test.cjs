@@ -7,6 +7,11 @@ const integrationSubpath = require('@ts-typed/compiler/integration');
 
 const projectContext = { projectRoot: __dirname };
 
+test('exposes its own package.json through the exports map', () => {
+  const manifest = require('@ts-typed/compiler/package.json');
+  assert.equal(manifest.name, '@ts-typed/compiler');
+});
+
 test('exports the versioned API from the package root and subpath', () => {
   assert.equal(integration.INTEGRATION_API_VERSION, 1);
   assert.equal(typeof integration.resolveProject, 'function');

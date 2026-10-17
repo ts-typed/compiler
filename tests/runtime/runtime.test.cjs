@@ -340,3 +340,75 @@ test('assertValue performs point-in-time validation without installing mutation 
   });
   assert.throws(() => runtime.assertValue(schema, value, context), runtime.StrictTypeError);
 });
+
+test('branded primitives accept the primitive value without requiring the phantom object member', () => {
+  const brandMarker = {
+    kind: 'object',
+    properties: { __brand: { schema: { kind: 'literal', value: 'Id' } } },
+  };
+  const schema = { kind: 'intersection', schemas: [stringSchema, brandMarker] };
+
+  assert.doesNotThrow(() => runtime.assertValue(schema, 'abc', context));
+  assert.throws(
+    () => runtime.assertValue(schema, 123, context),
+    (error) => error instanceof runtime.StrictTypeError && error.code === 'TYPE_MISMATCH',
+  );
+});
+
+test('branded number primitives keep enforcing the primitive member', () => {
+  const brandMarker = {
+    kind: 'object',
+    properties: { __brand: { schema: { kind: 'literal', value: 'UserId' } } },
+  };
+  const schema = { kind: 'intersection', schemas: [numberSchema, brandMarker] };
+
+  assert.doesNotThrow(() => runtime.assertValue(schema, 42, context));
+  assert.throws(() => runtime.assertValue(schema, '42', context), runtime.StrictTypeError);
+});
+
+test('branded primitives resolve object members declared through references', () => {
+  const registry = new runtime.SchemaRegistry();
+  registry.define('BrandMarker', {
+    kind: 'object',
+    properties: { __brand: { schema: { kind: 'literal', value: 'Id' } } },
+  });
+  const schema = {
+    kind: 'intersection',
+    schemas: [stringSchema, { kind: 'ref', name: 'BrandMarker' }],
+  };
+
+  assert.doesNotThrow(() => runtime.assertValue(schema, 'abc', { ...context, registry }));
+  assert.throws(() => runtime.assertValue(schema, 1, { ...context, registry }), runtime.StrictTypeError);
+});
+
+test('object-only intersections still require every object property for real objects', () => {
+  const schema = {
+    kind: 'intersection',
+    schemas: [
+      { kind: 'object', properties: { a: { schema: stringSchema } } },
+      { kind: 'object', properties: { b: { schema: numberSchema } } },
+    ],
+  };
+
+  assert.doesNotThrow(() => runtime.assertValue(schema, { a: 'x', b: 1 }, context));
+  assert.throws(
+    () => runtime.assertValue(schema, { a: 'x' }, context),
+    (error) => error instanceof runtime.StrictTypeError && error.code === 'REQUIRED_PROPERTY',
+  );
+});
+
+test('mixed primitive and object intersections still require the object member for real objects', () => {
+  const schema = {
+    kind: 'intersection',
+    schemas: [
+      { kind: 'primitive', name: 'object' },
+      { kind: 'object', properties: { __brand: { schema: { kind: 'literal', value: 'Id' } } } },
+    ],
+  };
+
+  assert.doesNotThrow(() => runtime.assertValue(schema, { __brand: 'Id' }, context));
+  assert.throws(
+    () => runtime.assertValue(schema, {}, context),
+    (error) => error instanceof runtime.StrictTypeError && error.code === 'REQUIRED_PROPERTY',
+  );
+});

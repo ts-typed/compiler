@@ -1,7 +1,8 @@
-import { readFile } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { dirname, join, resolve } from 'node:path';
 
 import { buildProject } from '../compiler/build';
+import type { CoverageReport } from '../compiler/report';
 import { createCoverageReport, formatCoverageReport } from '../compiler/report';
 import type { ConfigOverrides } from '../config';
 import { ConfigError, initializeProject, loadConfig } from '../config';
@@ -156,9 +157,24 @@ async function runBuild(args: readonly string[]): Promise<CliResult> {
       formatCoverageReport(coverage, resolve(config.tsconfig, '..')),
     ].filter((line) => line.length > 0);
 
+    const reportFile = config.diagnostics.reportFile;
+    if (reportFile !== null) {
+      await writeDiagnosticsReport(reportFile, coverage);
+      stdout.push(`Diagnostics report written to ${reportFile}`);
+    }
+
     return { exitCode: EXIT_SUCCESS, stdout, stderr: [] };
   } catch (error: unknown) {
     return { exitCode: EXIT_FAILURE, stdout: [], stderr: [describeError(error)] };
+  }
+}
+
+async function writeDiagnosticsReport(filePath: string, coverage: CoverageReport): Promise<void> {
+  try {
+    await mkdir(dirname(filePath), { recursive: true });
+    await writeFile(filePath, `${JSON.stringify(coverage, null, 2)}\n`, 'utf8');
+  } catch (error: unknown) {
+    throw new Error(`Could not write diagnostics report to ${filePath}: ${describeError(error)}`);
   }
 }
 

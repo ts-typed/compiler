@@ -1,2 +1,2 @@
 export type { FieldGuardOptions } from './field-guard-options.interface';
-export { installFieldGuard, lockReadonlyField, protectValue } from './guards';
+export { installFieldGuard, lockReadonlyField, lockRequiredField, protectValue } from './guards';

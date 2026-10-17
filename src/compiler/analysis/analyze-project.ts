@@ -45,15 +45,31 @@ export function analyzeProject(context: AnalyzeProjectContext): AnalysisResult {
     undefined,
     tsconfigPath,
   );
+  const compilerOptions: import('typescript').CompilerOptions = {
+    ...parsedConfig.options,
+    ...context.compilerOptions,
+  };
+  // strictNullChecks is what lets a runtime contract tell `null`/`undefined`
+  // apart from every other value; without it the type information the
+  // transformer reads from the checker is already too lossy to protect
+  // against, so this is a hard requirement per the project spec rather than
+  // a per-contract coverage limit.
+  const effectiveStrictNullChecks = compilerOptions.strictNullChecks ?? compilerOptions.strict ?? false;
+  if (effectiveStrictNullChecks !== true) {
+    throw new Error(
+      `ts-typed requires "strictNullChecks": true (directly, or via "strict": true) in ${tsconfigPath}. ` +
+      'Without it, null and undefined cannot be reliably distinguished from other values when building runtime contracts.',
+    );
+  }
   const program = typescript.createProgram({
     rootNames: parsedConfig.fileNames,
-    options: { ...parsedConfig.options, ...context.compilerOptions },
+    options: compilerOptions,
     projectReferences: parsedConfig.projectReferences,
   });
   const checker = program.getTypeChecker();
   const projectLoadMs = performance.now() - projectLoadStart;
   const typeAnalysisStart = performance.now();
-  const resolver = new TypeSchemaResolver(typescript, checker);
+  const resolver = new TypeSchemaResolver(typescript, checker, context.enforcePrivate === true);
   const contracts = new Map<import('typescript').Node, ContractDescriptor>();
   const coverage: CoverageItem[] = [];
   const diagnostics: CoverageDiagnostic[] = [];
@@ -350,8 +366,11 @@ function getUnsupportedMemberReason(
   ) {
     return 'Private, protected, and static members require class-specific instrumentation.';
   }
-  if (typescript.canHaveDecorators(node) && (typescript.getDecorators(node)?.length ?? 0) > 0) {
-    return 'Decorated members require framework-compatible instrumentation.';
+  // enforcePrivate rewrites a private field into a `#name` accessor pair, which
+  // drops the field's decorators (a decorator cannot target a `#` accessor).
+  // Keep such a member unsupported so its decorator is not silently lost.
+  if (isOnlyPrivate && (typescript.getDecorators(node)?.length ?? 0) > 0) {
+    return 'Decorated private members cannot keep their decorators under enforcePrivate.';
   }
   return undefined;
 }

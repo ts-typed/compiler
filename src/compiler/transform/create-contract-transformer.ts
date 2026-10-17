@@ -13,6 +13,8 @@ interface FunctionVisitState {
   readonly declaration: ts.FunctionLikeDeclaration;
   readonly descriptor?: ContractDescriptor;
   readonly schema?: Schema;
+  /** Contract for the values produced by `yield` (generators only; distinct from the return `schema`). */
+  readonly yieldSchema?: Schema;
   readonly isAsync: boolean;
   readonly name: string;
 }
@@ -23,6 +25,7 @@ interface FieldGuard {
   readonly initialized: boolean;
   readonly schema: Schema;
   readonly readonlyField: boolean;
+  readonly requiredField: boolean;
 }
 
 interface PrivateConversion {
@@ -98,6 +101,13 @@ export function createContractTransformer(
         if (typescript.isVariableDeclaration(node)) {
           return visitVariableDeclaration(node, state, factory, typescript, visitor, context);
         }
+        if (
+          (typescript.isPrefixUnaryExpression(node) || typescript.isPostfixUnaryExpression(node)) &&
+          (node.operator === typescript.SyntaxKind.PlusPlusToken ||
+            node.operator === typescript.SyntaxKind.MinusMinusToken)
+        ) {
+          return visitUpdateExpression(node, factory, typescript, visitor);
+        }
         if (typescript.isBinaryExpression(node)) {
           return visitBinaryExpression(
             node,
@@ -121,6 +131,9 @@ export function createContractTransformer(
         if (typescript.isReturnStatement(node)) {
           return visitReturnStatement(node, state, factory, typescript, visitor, context);
         }
+        if (typescript.isYieldExpression(node)) {
+          return visitYieldExpression(node, state, factory, typescript, visitor, context);
+        }
         if (isFunctionLikeWithBody(typescript, node)) {
           return visitFunctionLike(node, state, factory, typescript, checker, visitor, context);
         }
@@ -129,7 +142,7 @@ export function createContractTransformer(
 
       const visited = typescript.visitEachChild(sourceFile, visitor, context);
       reportUnhandledContracts(options, state);
-      return addRuntimePrelude(visited, state, factory, typescript, options);
+      return addRuntimePrelude(visited, state, factory, typescript, options, context);
     };
   };
 }
@@ -263,6 +276,110 @@ function visitVariableDeclaration(
   );
 }
 
+/**
+ * Returns the expression that actually receives an assignment or update
+ * operator, by peeling off any parentheses and type-only wrappers (`as`,
+ * `<T>`, `!`, `satisfies`) that sit directly around it. Stops as soon as the
+ * result is not one of those wrappers, so member and element accesses keep
+ * their own object expressions visited normally.
+ */
+function unwrapAssignmentTarget(
+  typescript: typeof import('typescript'),
+  expression: ts.Expression,
+): ts.Expression {
+  let current = expression;
+  while (
+    typescript.isParenthesizedExpression(current) ||
+    typescript.isAsExpression(current) ||
+    typescript.isTypeAssertionExpression(current) ||
+    typescript.isNonNullExpression(current) ||
+    typescript.isSatisfiesExpression(current)
+  ) {
+    current = current.expression;
+  }
+  return current;
+}
+
+function isAssignmentOperator(
+  typescript: typeof import('typescript'),
+  kind: ts.SyntaxKind,
+): boolean {
+  switch (kind) {
+    case typescript.SyntaxKind.EqualsToken:
+    case typescript.SyntaxKind.PlusEqualsToken:
+    case typescript.SyntaxKind.MinusEqualsToken:
+    case typescript.SyntaxKind.AsteriskEqualsToken:
+    case typescript.SyntaxKind.AsteriskAsteriskEqualsToken:
+    case typescript.SyntaxKind.SlashEqualsToken:
+    case typescript.SyntaxKind.PercentEqualsToken:
+    case typescript.SyntaxKind.LessThanLessThanEqualsToken:
+    case typescript.SyntaxKind.GreaterThanGreaterThanEqualsToken:
+    case typescript.SyntaxKind.GreaterThanGreaterThanGreaterThanEqualsToken:
+    case typescript.SyntaxKind.AmpersandEqualsToken:
+    case typescript.SyntaxKind.BarEqualsToken:
+    case typescript.SyntaxKind.CaretEqualsToken:
+    case typescript.SyntaxKind.AmpersandAmpersandEqualsToken:
+    case typescript.SyntaxKind.BarBarEqualsToken:
+    case typescript.SyntaxKind.QuestionQuestionEqualsToken:
+      return true;
+    default:
+      return false;
+  }
+}
+
+/**
+ * Maps an arithmetic or bitwise compound assignment operator (`+=`, `<<=`, …)
+ * to its binary operator (`+`, `<<`, …). Returns `undefined` for the logical
+ * assignment operators (`&&=`, `||=`, `??=`): those short-circuit, so
+ * rewriting `x &&= y` as `x = x && y` would change whether `y` is evaluated.
+ */
+function getCompoundAssignmentBinaryOperator(
+  typescript: typeof import('typescript'),
+  kind: ts.SyntaxKind,
+): ts.BinaryOperator | undefined {
+  switch (kind) {
+    case typescript.SyntaxKind.PlusEqualsToken:
+      return typescript.SyntaxKind.PlusToken;
+    case typescript.SyntaxKind.MinusEqualsToken:
+      return typescript.SyntaxKind.MinusToken;
+    case typescript.SyntaxKind.AsteriskEqualsToken:
+      return typescript.SyntaxKind.AsteriskToken;
+    case typescript.SyntaxKind.AsteriskAsteriskEqualsToken:
+      return typescript.SyntaxKind.AsteriskAsteriskToken;
+    case typescript.SyntaxKind.SlashEqualsToken:
+      return typescript.SyntaxKind.SlashToken;
+    case typescript.SyntaxKind.PercentEqualsToken:
+      return typescript.SyntaxKind.PercentToken;
+    case typescript.SyntaxKind.LessThanLessThanEqualsToken:
+      return typescript.SyntaxKind.LessThanLessThanToken;
+    case typescript.SyntaxKind.GreaterThanGreaterThanEqualsToken:
+      return typescript.SyntaxKind.GreaterThanGreaterThanToken;
+    case typescript.SyntaxKind.GreaterThanGreaterThanGreaterThanEqualsToken:
+      return typescript.SyntaxKind.GreaterThanGreaterThanGreaterThanToken;
+    case typescript.SyntaxKind.AmpersandEqualsToken:
+      return typescript.SyntaxKind.AmpersandToken;
+    case typescript.SyntaxKind.BarEqualsToken:
+      return typescript.SyntaxKind.BarToken;
+    case typescript.SyntaxKind.CaretEqualsToken:
+      return typescript.SyntaxKind.CaretToken;
+    default:
+      return undefined;
+  }
+}
+
+function visitUpdateExpression(
+  node: ts.PrefixUnaryExpression | ts.PostfixUnaryExpression,
+  factory: ts.NodeFactory,
+  typescript: typeof import('typescript'),
+  visitor: ts.Visitor,
+): ts.PrefixUnaryExpression | ts.PostfixUnaryExpression {
+  const target = unwrapAssignmentTarget(typescript, node.operand);
+  const operand = typescript.visitNode(target, visitor, isExpression) ?? target;
+  return typescript.isPrefixUnaryExpression(node)
+    ? factory.updatePrefixUnaryExpression(node, operand)
+    : factory.updatePostfixUnaryExpression(node, operand);
+}
+
 function visitBinaryExpression(
   node: ts.BinaryExpression,
   state: FileTransformState,
@@ -273,18 +390,48 @@ function visitBinaryExpression(
   visitor: ts.Visitor,
   context: ts.TransformationContext,
 ): ts.BinaryExpression {
-  const left = typescript.visitNode(node.left, visitor, isExpression) ?? node.left;
+  const isAssignment = isAssignmentOperator(typescript, node.operatorToken.kind);
+  const target = isAssignment ? unwrapAssignmentTarget(typescript, node.left) : node.left;
+  const left = typescript.visitNode(target, visitor, isExpression) ?? target;
   const right = typescript.visitNode(node.right, visitor, isExpression) ?? node.right;
-  if (!typescript.isIdentifier(node.left)) {
+  if (!typescript.isIdentifier(target)) {
     return factory.updateBinaryExpression(node, left, node.operatorToken, right);
   }
 
-  const symbol = checker.getSymbolAtLocation(node.left);
+  const symbol = checker.getSymbolAtLocation(target);
   const descriptor = symbol === undefined ? undefined : variableContracts.get(symbol);
   if (descriptor === undefined || descriptor.resolution.schema === undefined) {
     return factory.updateBinaryExpression(node, left, node.operatorToken, right);
   }
+  if (!isAssignment) {
+    // Comparisons (`>=`, `===`, `&&`, …) merely read the identifier; there is
+    // nothing being written here, so this is not a compound-assignment case
+    // and must not be reported as one.
+    return factory.updateBinaryExpression(node, left, node.operatorToken, right);
+  }
   if (node.operatorToken.kind !== typescript.SyntaxKind.EqualsToken) {
+    // `n += x` on a plain identifier is exactly `n = n + x`: the identifier has
+    // no side effects on read, so it is evaluated once either way. Rewrite it
+    // so the result is checked against the variable's schema.
+    const binaryOperator = getCompoundAssignmentBinaryOperator(typescript, node.operatorToken.kind);
+    if (binaryOperator !== undefined) {
+      state.handledContracts.add(descriptor);
+      return factory.updateBinaryExpression(
+        node,
+        left,
+        factory.createToken(typescript.SyntaxKind.EqualsToken),
+        createProtectCall(
+          factory,
+          state,
+          descriptor.resolution.schema,
+          factory.createBinaryExpression(left, binaryOperator, right),
+          descriptor,
+          'set',
+        ),
+      );
+    }
+
+    // Logical assignments (`&&=`, `||=`, `??=`) short-circuit and stay unsupported.
     reportUnsupported(
       optionsForState(state),
       state,
@@ -354,6 +501,46 @@ function visitReturnStatement(
   );
 }
 
+function visitYieldExpression(
+  node: ts.YieldExpression,
+  state: FileTransformState,
+  factory: ts.NodeFactory,
+  typescript: typeof import('typescript'),
+  visitor: ts.Visitor,
+  context: ts.TransformationContext,
+): ts.YieldExpression {
+  const expression = node.expression === undefined
+    ? undefined
+    : typescript.visitNode(node.expression, visitor, isExpression) as ts.Expression | undefined;
+  const functionState = state.functionStack.at(-1);
+  // `yield* delegate` is out of scope (it delegates to a whole iterable), and a bare `yield;`
+  // carries no value to check.
+  if (
+    node.asteriskToken !== undefined ||
+    expression === undefined ||
+    functionState?.yieldSchema === undefined
+  ) {
+    return factory.updateYieldExpression(node, node.asteriskToken, expression);
+  }
+
+  const value = functionState.isAsync
+    ? factory.createAwaitExpression(expression)
+    : expression;
+  return factory.updateYieldExpression(
+    node,
+    undefined,
+    createProtectCall(
+      factory,
+      state,
+      functionState.yieldSchema,
+      value,
+      { kind: 'yield', name: functionState.name },
+      'yield',
+      functionState.name,
+    ),
+  );
+}
+
 function visitFunctionLike(
   node: ts.FunctionLikeDeclaration & { readonly body: ts.ConciseBody },
   state: FileTransformState,
@@ -367,10 +554,12 @@ function visitFunctionLike(
   const isAsync = hasModifier(typescript, node, typescript.SyntaxKind.AsyncKeyword);
   const functionName = getFunctionName(typescript, node);
   const returnSchema = getReturnSchema(node, descriptor, isAsync, checker, state, typescript);
+  const yieldSchema = getYieldSchema(node, descriptor, state, checker, typescript);
   const functionState: FunctionVisitState = {
     declaration: node,
     descriptor,
     schema: returnSchema,
+    yieldSchema,
     isAsync,
     name: functionName,
   };
@@ -547,12 +736,12 @@ function visitClassMembers(
       continue;
     }
     if (typescript.isConstructorDeclaration(member) && member.body !== undefined) {
-      const transformed = typescript.visitEachChild(member, visitor, context) as ts.ConstructorDeclaration;
+      const transformed = (typescript.visitNode(member, visitor, isClassElement) ?? member) as ts.ConstructorDeclaration;
       implementationConstructor = transformed;
       visitedMembers.push(transformed);
       continue;
     }
-    visitedMembers.push(typescript.visitEachChild(member, visitor, context) as ts.ClassElement);
+    visitedMembers.push((typescript.visitNode(member, visitor, isClassElement) ?? member) as ts.ClassElement);
   }
 
   if (guards.length === 0 && privateInitStatements.length === 0 && privateLockStatements.length === 0) {
@@ -566,9 +755,11 @@ function visitClassMembers(
     ...guards.map((guard) => createInstallFieldGuard(factory, state, guard)),
     ...privateInitStatements,
   ];
+  const requiredFieldLockStatements = createRequiredFieldFinalizeStatements(node, guards, state, factory, typescript);
   const lockStatements = [
     ...guards.filter((guard) => guard.readonlyField).map((guard) => createLockReadonlyFieldCall(factory, state, guard)),
     ...privateLockStatements,
+    ...requiredFieldLockStatements,
   ];
   if (implementationConstructor === undefined) {
     const constructor = createConstructor(factory, installStatements, lockStatements, isDerived, typescript);
@@ -588,6 +779,37 @@ function visitClassMembers(
   );
   visitedMembers[constructorIndex] = updatedConstructor;
   return visitedMembers;
+}
+
+/**
+ * Builds the (possibly empty) one-statement block that finalizes required
+ * fields against `delete`/`Object.defineProperty` for this class, guarded
+ * by `new.target === <className>` so it only fires once construction has
+ * reached the most-derived class — see {@link createNewTargetIsClassCheck}.
+ * Anonymous class expressions have no name to compare `new.target` against
+ * and are a rare pattern in practice (NestJS/TypeORM classes are always
+ * named), so this is skipped for them: their required fields simply keep
+ * the same `configurable: true` behavior as before this feature existed,
+ * rather than risk comparing `new.target` against nothing meaningful.
+ */
+function createRequiredFieldFinalizeStatements(
+  node: ts.ClassLikeDeclaration,
+  guards: readonly FieldGuard[],
+  state: FileTransformState,
+  factory: ts.NodeFactory,
+  typescript: typeof import('typescript'),
+): readonly ts.Statement[] {
+  const requiredGuards = guards.filter((guard) => guard.requiredField);
+  if (requiredGuards.length === 0 || node.name === undefined) {
+    return [];
+  }
+  const lockCalls = requiredGuards.map((guard) => createLockRequiredFieldCall(factory, state, guard));
+  return [
+    factory.createIfStatement(
+      createNewTargetIsClassCheck(factory, typescript, node.name),
+      factory.createBlock(lockCalls, true),
+    ),
+  ];
 }
 
 interface ConvertedPrivateField {
@@ -798,6 +1020,9 @@ function visitPropertyDeclaration(
     initialized: initializer !== undefined,
     schema: descriptor.resolution.schema,
     readonlyField: enforceReadonly && hasModifier(typescript, node, typescript.SyntaxKind.ReadonlyKeyword),
+    // Only a bare field (no `?` and no `!`) is required: `!` is a definite
+    // assignment assertion and the field is tolerated as absent until assigned.
+    requiredField: node.questionToken === undefined && node.exclamationToken === undefined,
   });
   state.handledContracts.add(descriptor);
 
@@ -993,12 +1218,47 @@ function createLockReadonlyFieldCall(
   );
 }
 
+function createLockRequiredFieldCall(
+  factory: ts.NodeFactory,
+  state: FileTransformState,
+  guard: FieldGuard,
+): ts.Statement {
+  return factory.createExpressionStatement(
+    factory.createCallExpression(
+      factory.createPropertyAccessExpression(state.runtimeIdentifier, 'lockRequiredField'),
+      undefined,
+      [factory.createThis(), guard.key],
+    ),
+  );
+}
+
+/**
+ * `new.target === <className>` — true only when THIS class is the one
+ * actually being constructed (`new ClassName()`), never when a subclass's
+ * `super()` call is running this class's own constructor code. Used to
+ * defer a one-time, irreversible finalization step (like
+ * {@link createLockRequiredFieldCall}'s non-configurable lock) until
+ * construction has reached the most-derived class, so a subclass that
+ * redeclares the same field still gets to (re)initialize it first.
+ */
+function createNewTargetIsClassCheck(
+  factory: ts.NodeFactory,
+  typescript: typeof import('typescript'),
+  className: ts.Identifier,
+): ts.Expression {
+  return factory.createBinaryExpression(
+    factory.createMetaProperty(typescript.SyntaxKind.NewKeyword, factory.createIdentifier('target')),
+    factory.createToken(typescript.SyntaxKind.EqualsEqualsEqualsToken),
+    className,
+  );
+}
+
 function createProtectCall(
   factory: ts.NodeFactory,
   state: FileTransformState,
   schema: Schema,
   value: ts.Expression,
-  descriptor: ContractDescriptor,
+  descriptor: ProtectedContractLabel,
   operation: string,
   functionName?: string,
 ): ts.Expression {
@@ -1013,10 +1273,16 @@ function createProtectCall(
   );
 }
 
+/** The only descriptor fields the runtime context needs; `yield` checks have no ContractDescriptor. */
+interface ProtectedContractLabel {
+  readonly kind: string;
+  readonly name: string;
+}
+
 function createContextExpression(
   factory: ts.NodeFactory,
   state: FileTransformState,
-  descriptor: ContractDescriptor,
+  descriptor: ProtectedContractLabel,
   operation: string,
   functionName?: string,
 ): ts.ObjectLiteralExpression {
@@ -1133,31 +1399,11 @@ function addRuntimePrelude(
   factory: ts.NodeFactory,
   typescript: typeof import('typescript'),
   options: ContractTransformerOptions,
+  context: ts.TransformationContext,
 ): ts.SourceFile {
-  // A plain `require()` call is used instead of an `import` declaration
-  // because TypeScript only down-levels import/export syntax to CommonJS
-  // for source files it already recognized as modules at parse time. A
-  // file with no user-authored import/export (a "script") never gets that
-  // down-level pass, so an injected `ImportDeclaration` would be emitted
-  // verbatim as invalid ESM syntax inside a CommonJS "use strict" file.
-  const runtimeImport = factory.createVariableStatement(
-    undefined,
-    factory.createVariableDeclarationList(
-      [
-        factory.createVariableDeclaration(
-          state.runtimeIdentifier,
-          undefined,
-          undefined,
-          factory.createCallExpression(
-            factory.createIdentifier('require'),
-            undefined,
-            [factory.createStringLiteral(state.runtimeModule)],
-          ),
-        ),
-      ],
-      typescript.NodeFlags.Const,
-    ),
-  );
+  const runtimeImport = isEsModuleOutput(sourceFile, context.getCompilerOptions(), typescript)
+    ? createRuntimeImportDeclaration(state, factory)
+    : createRuntimeRequireStatement(state, factory, typescript);
   const registryDeclaration = factory.createVariableStatement(
     undefined,
     factory.createVariableDeclarationList(
@@ -1223,6 +1469,113 @@ function addRuntimePrelude(
     }
   }
   return factory.updateSourceFile(sourceFile, statements);
+}
+
+/**
+ * Whether TypeScript will emit this file with native ES module syntax, in
+ * which case the runtime must be brought in with an `import` declaration.
+ *
+ * - Non-node module kinds (`ESNext`, `ES2015`, `ES2020`, `ES2022`) emit ESM
+ *   for every file; CommonJS, UMD, AMD and System emit `require`-style code.
+ * - `Node16`/`NodeNext` decide per file from `impliedNodeFormat` (set from
+ *   the nearest `package.json` `type` field or the `.mts`/`.cts` extension).
+ *   This is the same granularity tsc uses to emit the file, so it is exact.
+ * - `Preserve` leaves `import`/`export` syntax untouched, so the file is
+ *   ESM unless TypeScript recorded it as a CommonJS-format file.
+ */
+function isEsModuleOutput(
+  sourceFile: ts.SourceFile,
+  compilerOptions: ts.CompilerOptions,
+  typescript: typeof import('typescript'),
+): boolean {
+  const moduleKind = resolveEmitModuleKind(compilerOptions, typescript);
+  const { ModuleKind } = typescript;
+  if (moduleKind === ModuleKind.Node16 || moduleKind === ModuleKind.NodeNext) {
+    return sourceFile.impliedNodeFormat === ModuleKind.ESNext;
+  }
+  if (moduleKind === ModuleKind.Preserve) {
+    return sourceFile.impliedNodeFormat !== ModuleKind.CommonJS;
+  }
+  return (
+    moduleKind === ModuleKind.ES2015 ||
+    moduleKind === ModuleKind.ES2020 ||
+    moduleKind === ModuleKind.ES2022 ||
+    moduleKind === ModuleKind.ESNext
+  );
+}
+
+/**
+ * Resolves the module kind TypeScript uses for emit, including its default
+ * when `module` is omitted (ES2015 for targets >= ES2015, CommonJS otherwise).
+ * `getEmitModuleKind` is what tsc itself calls and is exported at runtime,
+ * but it is absent from the public typings, hence the narrow cast and the
+ * documented fallback that mirrors its logic.
+ */
+function resolveEmitModuleKind(
+  compilerOptions: ts.CompilerOptions,
+  typescript: typeof import('typescript'),
+): ts.ModuleKind {
+  const internal = (typescript as { getEmitModuleKind?: (options: ts.CompilerOptions) => ts.ModuleKind })
+    .getEmitModuleKind;
+  if (typeof internal === 'function') {
+    return internal(compilerOptions);
+  }
+  if (compilerOptions.module !== undefined) {
+    return compilerOptions.module;
+  }
+  const target = compilerOptions.target ?? typescript.ScriptTarget.ES5;
+  return target >= typescript.ScriptTarget.ES2015
+    ? typescript.ModuleKind.ES2015
+    : typescript.ModuleKind.CommonJS;
+}
+
+function createRuntimeRequireStatement(
+  state: FileTransformState,
+  factory: ts.NodeFactory,
+  typescript: typeof import('typescript'),
+): ts.Statement {
+  // A plain `require()` call is used for CommonJS output instead of an
+  // `import` declaration because TypeScript only down-levels import/export
+  // syntax to CommonJS for source files it already recognized as modules at
+  // parse time. A file with no user-authored import/export (a "script") never
+  // gets that down-level pass, so an injected `ImportDeclaration` would be
+  // emitted verbatim as invalid ESM syntax inside a CommonJS "use strict" file.
+  return factory.createVariableStatement(
+    undefined,
+    factory.createVariableDeclarationList(
+      [
+        factory.createVariableDeclaration(
+          state.runtimeIdentifier,
+          undefined,
+          undefined,
+          factory.createCallExpression(
+            factory.createIdentifier('require'),
+            undefined,
+            [factory.createStringLiteral(state.runtimeModule)],
+          ),
+        ),
+      ],
+      typescript.NodeFlags.Const,
+    ),
+  );
+}
+
+function createRuntimeImportDeclaration(
+  state: FileTransformState,
+  factory: ts.NodeFactory,
+): ts.Statement {
+  // Native ESM output has no `require` global, so the runtime is bound with a
+  // real namespace import. Its named exports match what `require` returned.
+  return factory.createImportDeclaration(
+    undefined,
+    factory.createImportClause(
+      false,
+      undefined,
+      factory.createNamespaceImport(state.runtimeIdentifier),
+    ),
+    factory.createStringLiteral(state.runtimeModule),
+    undefined,
+  );
 }
 
 function reportUnhandledContracts(options: ContractTransformerOptions, state: FileTransformState): void {
@@ -1324,6 +1677,89 @@ function collectVariableContracts(
   return contracts;
 }
 
+function isGeneratorFunction(
+  node: ts.FunctionLikeDeclaration,
+  typescript: typeof import('typescript'),
+): boolean {
+  if (
+    typescript.isFunctionDeclaration(node) ||
+    typescript.isFunctionExpression(node) ||
+    typescript.isMethodDeclaration(node)
+  ) {
+    return node.asteriskToken !== undefined;
+  }
+  return false;
+}
+
+/**
+ * Returns the type argument at `index` of a generic reference type such as
+ * `Generator<T, TReturn, TNext>`, `AsyncGenerator<...>`, `Iterable<T>` or
+ * `IterableIterator<T>`. Uses only public API: the `Reference` object flag plus
+ * `checker.getTypeArguments`. Returns undefined for any other type.
+ */
+function getTypeArgumentAt(
+  checker: ts.TypeChecker,
+  typescript: typeof import('typescript'),
+  type: ts.Type,
+  index: number,
+): ts.Type | undefined {
+  if ((type.flags & typescript.TypeFlags.Object) === 0) {
+    return undefined;
+  }
+  const objectType = type as ts.ObjectType;
+  if ((objectType.objectFlags & typescript.ObjectFlags.Reference) === 0) {
+    return undefined;
+  }
+  return checker.getTypeArguments(objectType as ts.TypeReference)[index];
+}
+
+function isUncheckableType(type: ts.Type, typescript: typeof import('typescript')): boolean {
+  return (type.flags & (
+    typescript.TypeFlags.Any |
+    typescript.TypeFlags.Unknown |
+    typescript.TypeFlags.Void
+  )) !== 0;
+}
+
+function getYieldSchema(
+  node: ts.FunctionLikeDeclaration,
+  descriptor: ContractDescriptor | undefined,
+  state: FileTransformState,
+  checker: ts.TypeChecker,
+  typescript: typeof import('typescript'),
+): Schema | undefined {
+  if (!isGeneratorFunction(node, typescript)) {
+    return undefined;
+  }
+  const signature = checker.getSignatureFromDeclaration(node);
+  if (signature === undefined) {
+    return undefined;
+  }
+  const yieldedType = getTypeArgumentAt(
+    checker,
+    typescript,
+    checker.getReturnTypeOfSignature(signature),
+    0,
+  );
+  if (yieldedType === undefined || isUncheckableType(yieldedType, typescript)) {
+    return undefined;
+  }
+  const resolution = optionsForState(state).analysis.resolver.resolve(yieldedType, node);
+  if (resolution.schema === undefined) {
+    if (descriptor !== undefined) {
+      reportUnsupported(
+        optionsForState(state),
+        state,
+        descriptor,
+        node,
+        'The yielded type has no materializable runtime contract.',
+      );
+    }
+    return undefined;
+  }
+  return resolution.schema;
+}
+
 function getReturnSchema(
   node: ts.FunctionLikeDeclaration,
   descriptor: ContractDescriptor | undefined,
@@ -1340,6 +1776,25 @@ function getReturnSchema(
         state.handledContracts.add(descriptor);
       }
       return undefined;
+    }
+    if (isGeneratorFunction(node, typescript)) {
+      // A generator's `return` value is governed by TReturn (the second type argument),
+      // not by the whole Generator<...> type that the analysis descriptor carries.
+      const returnedType = getTypeArgumentAt(checker, typescript, returnType, 1);
+      if (returnedType === undefined || isUncheckableType(returnedType, typescript)) {
+        return undefined;
+      }
+      const resolution = optionsForState(state).analysis.resolver.resolve(returnedType, node);
+      if (resolution.schema === undefined && descriptor !== undefined) {
+        reportUnsupported(
+          optionsForState(state),
+          state,
+          descriptor,
+          node,
+          'The generator return type has no materializable runtime contract.',
+        );
+      }
+      return resolution.schema;
     }
   }
   if (!isAsync) {
@@ -1673,5 +2128,9 @@ function isExpression(node: ts.Node | undefined): node is ts.Expression {
 }
 
 function isConciseBody(node: ts.Node | undefined): node is ts.ConciseBody {
+  return node !== undefined;
+}
+
+function isClassElement(node: ts.Node | undefined): node is ts.ClassElement {
   return node !== undefined;
 }

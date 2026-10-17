@@ -28,5 +28,5 @@ export type {
 } from './schema.interface';
 export { assertValue } from './assert-value';
 export type { AssertionContext } from './assertion-context.interface';
-export { protectValue, installFieldGuard, lockReadonlyField } from './guards';
+export { protectValue, installFieldGuard, lockReadonlyField, lockRequiredField } from './guards';
 export type { FieldGuardOptions } from './guards';

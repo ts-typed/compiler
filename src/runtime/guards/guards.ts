@@ -135,6 +135,32 @@ export function lockReadonlyField(instance: object, key: PropertyKey): void {
   }
 }
 
+/**
+ * Makes a required field's guarded accessor non-configurable, so that
+ * `delete instance.field` and `Object.defineProperty(instance, 'field', …)`
+ * can no longer remove or replace it behind the guarded setter's back. The
+ * compiler calls this once `new.target` confirms construction has reached
+ * the most-derived class for this instance — never from a base class's own
+ * constructor, and never unconditionally at install time in
+ * {@link installFieldGuard} — because a subclass that redeclares this same
+ * field re-initializes it through `[[DefineOwnProperty]]` semantics in ITS
+ * OWN constructor (which runs after the base class constructor returns),
+ * and that requires the property to still be configurable until then. A
+ * missing or already non-configurable property is a harmless no-op.
+ */
+export function lockRequiredField(instance: object, key: PropertyKey): void {
+  const descriptor = Object.getOwnPropertyDescriptor(instance, key);
+  if (descriptor === undefined || descriptor.configurable === false) {
+    return;
+  }
+  try {
+    Object.defineProperty(instance, key, { configurable: false });
+  } catch {
+    // Non-configurable already, or the engine refused for an unrelated
+    // reason (e.g. a proxy trap) — either way, nothing more to do here.
+  }
+}
+
 function createProtectionState(): ProtectionState {
   return { visited: new Map<object, Set<Schema>>() };
 }
@@ -360,6 +386,9 @@ function installProtection(
     case 'literal':
     case 'never':
     case 'primitive':
+    case 'date':
+    case 'function':
+    case 'templateLiteral':
     case 'unknown':
       return;
   }
@@ -563,6 +592,14 @@ function installDataGuard(
   };
 
   try {
+    // Always installed as configurable: a subclass that redeclares this
+    // same field re-initializes it through `[[DefineOwnProperty]]` semantics
+    // (native class fields, target >= ES2022) in ITS OWN constructor, which
+    // requires the property to still be configurable at that point. Locking
+    // a required field against `delete`/`Object.defineProperty` happens
+    // later and separately, via {@link lockRequiredField}, once construction
+    // has reached the most-derived class and no further redeclaration can
+    // happen — see that function's own doc comment.
     Object.defineProperty(owner, key, {
       get: guardState.getValue,
       set: guardState.setValue,

@@ -6,6 +6,10 @@ import type { SchemaResolution } from './schema-resolution.interface';
 const ALIAS_LIMIT_REASON =
   'The value is validated at the typed boundary, but mutations through external aliases can escape.';
 
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 interface CompoundResolution {
   readonly schema?: Schema;
   readonly status: 'protected' | 'partial' | 'unsupported';
@@ -23,6 +27,7 @@ export class TypeSchemaResolver {
   public constructor(
     private readonly _typescript: typeof import('typescript'),
     private readonly _checker: ts.TypeChecker,
+    private readonly _enforcePrivate: boolean = false,
   ) {}
 
   public resolve(type: ts.Type, node: ts.Node): SchemaResolution {
@@ -143,8 +148,156 @@ export class TypeSchemaResolver {
     if ((flags & typeFlags.NonPrimitive) !== 0) {
       return { status: 'protected', schema: { kind: 'primitive', name: 'object' } };
     }
+    if (this._isGlobalDate(type)) {
+      // Date is an opaque leaf: its methods are never enumerated (they are
+      // callable and would otherwise poison the whole object contract).
+      return { status: 'protected', schema: { kind: 'date' } };
+    }
+    if ((flags & typeFlags.TemplateLiteral) !== 0) {
+      return this._resolveTemplateLiteral(type as ts.TemplateLiteralType);
+    }
 
     return undefined;
+  }
+
+  /**
+   * Open template literal types (`${number}px`, `user_${string}`) are leaves
+   * validated by a regex compiled from their texts and placeholders. Finite
+   * interpolations (`${'a' | 'b'}`) never reach here: TypeScript already
+   * expands them into a union of string literals.
+   */
+  private _resolveTemplateLiteral(type: ts.TemplateLiteralType): SchemaResolution {
+    const pattern = this._templateLiteralPattern(type);
+    if (pattern === undefined) {
+      return this._unsupported(
+        `Template literal type ${this._checker.typeToString(type)} has a placeholder with no runtime pattern.`,
+      );
+    }
+    return { status: 'protected', schema: { kind: 'templateLiteral', pattern } };
+  }
+
+  private _templateLiteralPattern(type: ts.TemplateLiteralType): string | undefined {
+    const placeholderPatterns: string[] = [];
+    for (const placeholder of type.types) {
+      const placeholderPattern = this._placeholderPattern(placeholder);
+      if (placeholderPattern === undefined) {
+        return undefined;
+      }
+      placeholderPatterns.push(placeholderPattern);
+    }
+
+    let pattern = '^';
+    type.texts.forEach((text, index) => {
+      pattern += escapeRegExp(text);
+      if (index < placeholderPatterns.length) {
+        pattern += placeholderPatterns[index];
+      }
+    });
+    return `${pattern}$`;
+  }
+
+  private _placeholderPattern(placeholder: ts.Type): string | undefined {
+    const typeFlags = this._typescript.TypeFlags;
+    if ((placeholder.flags & typeFlags.String) !== 0) {
+      // Any string, including the empty one. `[\s\S]` also matches newlines.
+      return '[\\s\\S]*';
+    }
+    if ((placeholder.flags & typeFlags.Number) !== 0) {
+      // Integers and plain decimals only; exponent notation, `Infinity` and
+      // `NaN` are not covered (documented limitation).
+      return '-?\\d+(?:\\.\\d+)?';
+    }
+    if ((placeholder.flags & typeFlags.BigInt) !== 0) {
+      return '-?\\d+';
+    }
+    if ((placeholder.flags & typeFlags.Boolean) !== 0) {
+      return '(?:true|false)';
+    }
+    if (placeholder.isStringLiteral() || placeholder.isNumberLiteral()) {
+      return escapeRegExp(String(placeholder.value));
+    }
+    if (placeholder.isUnion()) {
+      const alternatives = placeholder.types.map((member) => this._placeholderPattern(member));
+      if (alternatives.some((alternative) => alternative === undefined)) {
+        return undefined;
+      }
+      return `(?:${alternatives.join('|')})`;
+    }
+    return undefined;
+  }
+
+  /**
+   * Heuristic: the built-in `Date` interface is declared in a TypeScript lib
+   * file, which carries `/// <reference no-default-lib="true"/>` and therefore
+   * `hasNoDefaultLib === true`. A user-declared class/interface named `Date`
+   * lives in an ordinary module and is not matched.
+   */
+  /**
+   * Resolves the type of an object property. A property whose type is purely a
+   * function (or such a function optionally widened with `undefined`/`null`, as
+   * in `onClick?: () => void`) is an opaque `function` leaf, so one callback field
+   * does not make the whole containing object unsupported. Any other shape goes
+   * through the general resolution unchanged.
+   */
+  private _resolvePropertyType(type: ts.Type, declaration: ts.Node): SchemaResolution {
+    const members = type.isUnion() ? type.types : [type];
+    const functionMembers = members.filter((member) => this._isPureFunction(member));
+    if (functionMembers.length === 0) {
+      return this._resolveType(type, declaration, true);
+    }
+    const typeFlags = this._typescript.TypeFlags;
+    const schemas: Schema[] = [];
+    for (const member of members) {
+      if (this._isPureFunction(member)) {
+        schemas.push({ kind: 'function' });
+      } else if ((member.flags & typeFlags.Undefined) !== 0) {
+        schemas.push({ kind: 'literal', value: undefined });
+      } else if ((member.flags & typeFlags.Null) !== 0) {
+        schemas.push({ kind: 'literal', value: null });
+      } else {
+        // Mixed with a non-function member: not a pure function leaf.
+        return this._resolveType(type, declaration, true);
+      }
+    }
+    return {
+      status: 'protected',
+      schema: schemas.length === 1 ? schemas[0] : { kind: 'union', schemas },
+    };
+  }
+
+  private _isClassMethod(property: ts.Symbol): boolean {
+    return (property.declarations ?? []).some(
+      (declaration) =>
+        this._typescript.isMethodDeclaration(declaration) && this._typescript.isClassLike(declaration.parent),
+    );
+  }
+
+  /**
+   * Heuristic: a type is "purely a function" when it has call signatures, no
+   * construct signatures, and no own members at all. `getPropertiesOfType` does
+   * not include the members inherited from the global `Function` interface
+   * (`call`, `apply`, `bind`, `name`, ...), which are reached through the apparent
+   * type, so an empty property list means no user-declared extras. Index
+   * signatures are checked too, since they are also extra structure. Anything
+   * with extra members (`{ (): void; extra: string }`) stays unsupported.
+   */
+  private _isPureFunction(type: ts.Type): boolean {
+    return (
+      type.getCallSignatures().length > 0 &&
+      type.getConstructSignatures().length === 0 &&
+      this._checker.getPropertiesOfType(type).length === 0 &&
+      this._checker.getIndexInfosOfType(type).length === 0
+    );
+  }
+
+  private _isGlobalDate(type: ts.Type): boolean {
+    const symbol = type.getSymbol();
+    if (symbol === undefined || symbol.getName() !== 'Date') {
+      return false;
+    }
+    return (symbol.getDeclarations() ?? []).some(
+      (declaration) => declaration.getSourceFile().hasNoDefaultLib,
+    );
   }
 
   private _resolveDefinitionOrCompound(
@@ -304,9 +457,24 @@ export class TypeSchemaResolver {
           'True #private class fields have no reflective runtime access and cannot be represented by the runtime schema model.',
         );
       }
+      if (this._isConvertedToHashPrivate(property)) {
+        // With enforcePrivate, the transformer rewrites this field into a real
+        // `#private` field, so it has no reflective property at runtime and
+        // must not be required by the structural schema. Only this member is
+        // omitted; the rest of the class stays validated.
+        continue;
+      }
+      if (this._isClassMethod(property)) {
+        // Class methods keep the established contract: a class with a method is
+        // not represented structurally. Only non-method members (fields holding
+        // callbacks, interface method signatures) become function leaves.
+        return this._unsupported(
+          `Property ${propertyName} is unsupported: Callable and constructable contracts are not represented by object schemas.`,
+        );
+      }
       const declaration = property.valueDeclaration ?? property.declarations?.[0] ?? node;
       const propertyType = this._checker.getTypeOfSymbolAtLocation(property, declaration);
-      const propertyResolution = this._resolveType(propertyType, declaration, true);
+      const propertyResolution = this._resolvePropertyType(propertyType, declaration);
       if (propertyResolution.schema === undefined) {
         return this._unsupported(
           `Property ${propertyName} is unsupported: ${propertyResolution.reason ?? 'unknown type limit'}`,
@@ -352,6 +520,28 @@ export class TypeSchemaResolver {
         ? `${ALIAS_LIMIT_REASON} The single runtime index contract does not distinguish string and symbol keys.`
         : ALIAS_LIMIT_REASON,
     };
+  }
+
+  /**
+   * Mirrors the transformer's `isOnlyPrivateField` rule: with enforcePrivate,
+   * a plain `private` PropertyDeclaration with an identifier name (not
+   * protected, not static) is converted to a real `#private` field. Parameter
+   * properties are not converted and remain part of the schema.
+   */
+  private _isConvertedToHashPrivate(property: ts.Symbol): boolean {
+    if (!this._enforcePrivate) {
+      return false;
+    }
+    const declaration = property.valueDeclaration ?? property.declarations?.[0];
+    if (declaration === undefined || !this._typescript.isPropertyDeclaration(declaration)) {
+      return false;
+    }
+    if (!this._typescript.isIdentifier(declaration.name)) {
+      return false;
+    }
+    const flags = this._typescript.getCombinedModifierFlags(declaration);
+    return (flags & this._typescript.ModifierFlags.Private) !== 0 &&
+      (flags & (this._typescript.ModifierFlags.Protected | this._typescript.ModifierFlags.Static)) === 0;
   }
 
   private _getDefinitionName(type: ts.Type, node: ts.Node): string | undefined {

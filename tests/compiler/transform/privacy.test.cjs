@@ -289,7 +289,114 @@ test('without compiler.enforcePrivate, private fields remain unprotected as befo
         '}',
         'const box = new Box();',
         '(box as any).count = "bad";',
-        'if ((box.read() as any) !== "bad") throw new Error("expected unenforced private to be a plain writable field");',
+        'if ((box as any).count !== "bad") throw new Error("expected unenforced private to be a plain writable field");',
+        'let rejected = false;',
+        'try { box.read(); } catch (caught) { rejected = caught instanceof Error && caught.name === "StrictTypeError"; }',
+        'if (!rejected) throw new Error("expected method return to be validated against number");',
+        'process.stdout.write("OK");',
+      ].join('\n'),
+    },
+    { enforcePrivate: false },
+  );
+
+  assert.equal(project.emitSkipped, false);
+  const result = runEntry(project);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, 'OK');
+});
+
+test('compiler.enforcePrivate does not require a converted private field in the schema, so a simple class with a private field passes a typed boundary', () => {
+  const project = emitProject(
+    {
+      'main.ts': [
+        'class Box {',
+        '  private _v = 0;',
+        '}',
+        'function take(b: Box): void { void b; }',
+        'take(new Box());',
+        'const b: Box = new Box();',
+        'void b;',
+        'process.stdout.write("OK");',
+      ].join('\n'),
+    },
+    { enforcePrivate: true },
+  );
+
+  assert.equal(project.emitSkipped, false);
+  const result = runEntry(project);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, 'OK');
+});
+
+test('compiler.enforcePrivate still validates public fields of a class that has a converted private field', () => {
+  const project = emitProject(
+    {
+      'main.ts': [
+        "import { StrictTypeError } from 'ts-typed';",
+        'function expectTypeError(action: () => void): void {',
+        '  try { action(); } catch (error) { if (error instanceof StrictTypeError) return; throw error; }',
+        '  throw new Error("missing StrictTypeError");',
+        '}',
+        'class Box {',
+        '  private _v = 0;',
+        '  public label: string = "x";',
+        '}',
+        'function take(b: Box): void { void b; }',
+        'expectTypeError(() => take({} as any));',
+        'process.stdout.write("OK");',
+      ].join('\n'),
+    },
+    { enforcePrivate: true },
+  );
+
+  assert.equal(project.emitSkipped, false);
+  const result = runEntry(project);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, 'OK');
+});
+
+test('compiler.enforcePrivate keeps constructor parameter properties required in the schema', () => {
+  const project = emitProject(
+    {
+      'main.ts': [
+        "import { StrictTypeError } from 'ts-typed';",
+        'function expectTypeError(action: () => void): void {',
+        '  try { action(); } catch (error) { if (error instanceof StrictTypeError) return; throw error; }',
+        '  throw new Error("missing StrictTypeError");',
+        '}',
+        'class Named {',
+        '  constructor(private foo: string) {}',
+        '}',
+        'function take(n: Named): void { void n; }',
+        'take(new Named("x"));',
+        'expectTypeError(() => take({} as any));',
+        'process.stdout.write("OK");',
+      ].join('\n'),
+    },
+    { enforcePrivate: true },
+  );
+
+  assert.equal(project.emitSkipped, false);
+  const result = runEntry(project);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, 'OK');
+});
+
+test('with compiler.enforcePrivate set to false, a private field stays a required schema property', () => {
+  const project = emitProject(
+    {
+      'main.ts': [
+        "import { StrictTypeError } from 'ts-typed';",
+        'function expectTypeError(action: () => void): void {',
+        '  try { action(); } catch (error) { if (error instanceof StrictTypeError) return; throw error; }',
+        '  throw new Error("missing StrictTypeError");',
+        '}',
+        'class Box {',
+        '  private _v = 0;',
+        '}',
+        'function take(b: Box): void { void b; }',
+        'take(new Box());',
+        'expectTypeError(() => take({} as any));',
         'process.stdout.write("OK");',
       ].join('\n'),
     },

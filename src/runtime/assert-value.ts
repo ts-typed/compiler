@@ -55,6 +55,23 @@ function validate(
       return;
     case 'never':
       fail(context, path, 'never', value, 'TYPE_MISMATCH');
+    case 'function':
+      if (typeof value !== 'function') {
+        fail(context, path, 'function', value, 'TYPE_MISMATCH');
+      }
+      return;
+    case 'templateLiteral':
+      if (typeof value !== 'string' || !matchesTemplateLiteral(schema.pattern, value)) {
+        fail(context, path, `template literal matching /${schema.pattern}/`, value, 'TYPE_MISMATCH');
+      }
+      return;
+    case 'date':
+      // An `Invalid Date` is still a Date instance; reject it here with a
+      // contract error instead of letting it fail later with a RangeError.
+      if (!(value instanceof Date) || Number.isNaN(value.getTime())) {
+        fail(context, path, 'Date', value, 'TYPE_MISMATCH');
+      }
+      return;
     case 'primitive':
       if (!matchesPrimitive(schema.name, value)) {
         fail(context, path, schema.name, value, 'TYPE_MISMATCH');
@@ -109,6 +126,21 @@ function validateIntersection(
 
   if (objectSchemas.length === schema.schemas.length) {
     validateObject(combineObjectSchemas(objectSchemas), value, context, path, state);
+    return;
+  }
+
+  if (!isReferenceValue(value)) {
+    // Branded/tagged primitives (`string & { readonly __brand: 'Id' }`) are a
+    // type-level trick: the object member has no runtime representation on a
+    // primitive, so it is a phantom marker and must not be enforced against
+    // the value. The primitive members still are.
+    for (const candidate of schema.schemas) {
+      const resolved =
+        candidate.kind === 'ref' ? resolveReference(candidate, state.registry) : candidate;
+      if (!isObjectSchema(resolved)) {
+        validate(candidate, value, context, path, state);
+      }
+    }
     return;
   }
 
@@ -412,6 +444,17 @@ function receivedName(value: unknown): string {
     return 'array';
   }
   return typeof value;
+}
+
+const templateLiteralPatterns = new Map<string, RegExp>();
+
+function matchesTemplateLiteral(pattern: string, value: string): boolean {
+  let regex = templateLiteralPatterns.get(pattern);
+  if (regex === undefined) {
+    regex = new RegExp(pattern);
+    templateLiteralPatterns.set(pattern, regex);
+  }
+  return regex.test(value);
 }
 
 function fail(

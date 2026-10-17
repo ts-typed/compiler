@@ -186,18 +186,28 @@ test('unsupported protected syntax emits localized warnings and preserves execut
   const project = emitProject({
     'main.ts': [
       'const externalValue: any = 2;',
+      // Arithmetic compound assignments are rewritten and guarded (no warning).
       'let count = 1;',
       'count += externalValue;',
+      'let total = 1;',
+      'total *= externalValue;',
+      // Logical compound assignments short-circuit, so they stay unsupported.
+      'let flag: boolean = false;',
+      'const externalFlag: any = true;',
+      'flag ||= externalFlag;',
       'class State { static value: number = 1; }',
       'const callable: () => string = () => "ok";',
-      'if (count !== 3 || State.value !== 1 || callable() !== "ok") throw new Error("semantics changed");',
+      // Comparisons on guarded identifiers (`!==`) must not themselves be
+      // reported as compound assignments (see B7): this line exercises that
+      // without inflating the warning count below.
+      'if (count !== 3 || total !== 2 || flag !== true || State.value !== 1 || callable() !== "ok") throw new Error("semantics changed");',
     ].join('\n'),
   });
 
   const syntaxWarnings = project.diagnostics.filter(
     (diagnostic) => diagnostic.code === 'TT_UNSUPPORTED_SYNTAX',
   );
-  assert.equal(syntaxWarnings.length >= 2, true);
+  assert.equal(syntaxWarnings.length, 1);
   for (const diagnostic of syntaxWarnings) {
     assert.equal(diagnostic.category, 'warning');
     assert.equal(diagnostic.status === 'partial' || diagnostic.status === 'unsupported', true);
@@ -209,4 +219,133 @@ test('unsupported protected syntax emits localized warnings and preserves execut
   }
   const result = runEntry(project);
   assert.equal(result.status, 0, result.stderr);
+});
+
+test('a required class field cannot be deleted; the value survives the attempt', () => {
+  const project = emitProject({
+    'main.ts': [
+      'class Box { name: string = "Ada"; }',
+      'const instancia = new Box();',
+      'let threw: unknown;',
+      'try { delete (instancia as any).name; } catch (error) { threw = error; }',
+      'if (!(threw instanceof TypeError)) throw new Error("delete did not throw TypeError");',
+      'if (instancia.name !== "Ada") throw new Error("required field was removed: " + instancia.name);',
+      'process.stdout.write("OK");',
+    ].join('\n'),
+  });
+
+  const result = runEntry(project);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, 'OK');
+});
+
+test('an optional class field can still be deleted, leaving it undefined', () => {
+  const project = emitProject({
+    'main.ts': [
+      'class Box { label?: string = "x"; }',
+      'const instancia = new Box();',
+      'delete instancia.label;',
+      'if (instancia.label !== undefined) throw new Error("optional field was not removed");',
+      'process.stdout.write("OK");',
+    ].join('\n'),
+  });
+
+  const result = runEntry(project);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, 'OK');
+});
+
+test('Object.defineProperty cannot replace the guard of a required class field', () => {
+  const project = emitProject({
+    'main.ts': [
+      'class Box { name: string = "Ada"; }',
+      'const instancia = new Box();',
+      'let threw: unknown;',
+      'try { Object.defineProperty(instancia, "name", { value: 123, configurable: true }); } catch (error) { threw = error; }',
+      'if (!(threw instanceof TypeError)) throw new Error("defineProperty did not throw TypeError");',
+      'if (instancia.name !== "Ada") throw new Error("required field was replaced: " + String(instancia.name));',
+      'process.stdout.write("OK");',
+    ].join('\n'),
+  });
+
+  const result = runEntry(project);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, 'OK');
+});
+
+test('a required class field still accepts valid writes and rejects invalid ones through its guard', () => {
+  const project = emitProject({
+    'main.ts': [
+      "import { StrictTypeError } from 'ts-typed';",
+      'class Box { name: string = "Ada"; }',
+      'const instancia = new Box();',
+      'instancia.name = "Grace";',
+      'if (instancia.name !== "Grace") throw new Error("valid write was not stored");',
+      'let threw: unknown;',
+      'try { (instancia as any).name = 42; } catch (error) { threw = error; }',
+      'if (!(threw instanceof StrictTypeError)) throw new Error("invalid write was not rejected");',
+      'if (instancia.name !== "Grace") throw new Error("invalid write changed the value");',
+      'process.stdout.write("OK");',
+    ].join('\n'),
+  });
+
+  const result = runEntry(project);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, 'OK');
+});
+
+test('a definite-assignment (!) class field stays configurable and can be deleted', () => {
+  const project = emitProject({
+    'main.ts': [
+      'class Box { name!: string; }',
+      'const instancia = new Box();',
+      'instancia.name = "Ada";',
+      'delete (instancia as any).name;',
+      'if (instancia.name !== undefined) throw new Error("definite-assignment field was not removed");',
+      'process.stdout.write("OK");',
+    ].join('\n'),
+  });
+
+  const result = runEntry(project);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, 'OK');
+});
+
+test('a subclass redeclaring the same required field it inherits can still construct, and the lock only applies to the most-derived class', () => {
+  const project = emitProject({
+    'main.ts': [
+      'class A { name: string = "a"; }',
+      'class B extends A { name: string = "b"; }',
+      'const instancia = new B();',
+      'if (instancia.name !== "b") throw new Error("subclass field initializer was lost: " + instancia.name);',
+      'let threw: unknown;',
+      'try { delete (instancia as any).name; } catch (error) { threw = error; }',
+      'if (!(threw instanceof TypeError)) throw new Error("delete on the most-derived instance did not throw");',
+      'if (instancia.name !== "b") throw new Error("required field was removed from the most-derived instance");',
+      'process.stdout.write("OK");',
+    ].join('\n'),
+  });
+
+  const result = runEntry(project);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, 'OK');
+});
+
+test('constructing the base class directly still locks its own required field immediately', () => {
+  const project = emitProject({
+    'main.ts': [
+      'class A { name: string = "a"; }',
+      'class B extends A { name: string = "b"; }',
+      'void B;',
+      'const instancia = new A();',
+      'let threw: unknown;',
+      'try { delete (instancia as any).name; } catch (error) { threw = error; }',
+      'if (!(threw instanceof TypeError)) throw new Error("delete on a direct A instance did not throw");',
+      'process.stdout.write("OK");',
+    ].join('\n'),
+  });
+
+  const result = runEntry(project);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, 'OK');
 });

@@ -1,11 +1,14 @@
 import type {
   ArraySchema,
+  DateSchema,
+  FunctionSchema,
   IntersectionSchema,
   LiteralSchema,
   NeverSchema,
   ObjectSchema,
   PrimitiveSchema,
   RefSchema,
+  TemplateLiteralSchema,
   TupleSchema,
   UnionSchema,
   UnknownSchema,
@@ -31,5 +34,8 @@ export type Schema =
   | TupleSchema
   | ObjectSchema
   | RefSchema
+  | DateSchema
+  | FunctionSchema
+  | TemplateLiteralSchema
   | UnknownSchema
   | NeverSchema;

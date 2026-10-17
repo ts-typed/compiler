@@ -183,3 +183,56 @@ test('an unrecognized build flag exits with the usage exit code', async () => {
   assert.equal(result.exitCode, 2);
   assert.match(result.stderr.join('\n'), /Unknown build option/);
 });
+
+function configureDiagnosticsReport(configPath, reportFile) {
+  const config = JSON.parse(readFileSync(configPath, 'utf8'));
+  config.diagnostics = { ...config.diagnostics, reportFile };
+  writeFileSync(configPath, JSON.stringify(config));
+}
+
+test('build writes the coverage report as JSON to diagnostics.reportFile, creating missing parent directories', async () => {
+  const { projectRoot, configPath } = writeConsumerProject();
+  configureDiagnosticsReport(configPath, './reports/coverage.json');
+
+  const result = await runCli(['build', '--config', configPath]);
+  assert.equal(result.exitCode, 0, result.stderr.join('\n'));
+
+  const reportPath = join(projectRoot, 'reports', 'coverage.json');
+  assert.equal(existsSync(reportPath), true);
+  const report = JSON.parse(readFileSync(reportPath, 'utf8'));
+  assert.ok(Array.isArray(report.items));
+  assert.ok(Array.isArray(report.warnings));
+  assert.ok(Array.isArray(report.files));
+  const stdoutText = result.stdout.join('\n');
+  assert.match(stdoutText, /Diagnostics report written to .*reports\/coverage\.json$/m);
+
+  const summary = stdoutText.match(/^(\S+): (\d+) protected, (\d+) partial, (\d+) unsupported, (\d+) open$/m);
+  assert.ok(summary, 'stdout contains a per-file coverage summary');
+  assert.equal(report.files.length, 1);
+  assert.equal(report.files[0].file.endsWith(summary[1]), true);
+  assert.deepEqual(
+    [report.files[0].protected, report.files[0].partial, report.files[0].unsupported, report.files[0].open],
+    [Number(summary[2]), Number(summary[3]), Number(summary[4]), Number(summary[5])],
+  );
+});
+
+test('build without diagnostics.reportFile writes no report file', async () => {
+  const { projectRoot, configPath } = writeConsumerProject();
+
+  const result = await runCli(['build', '--config', configPath]);
+  assert.equal(result.exitCode, 0, result.stderr.join('\n'));
+  assert.doesNotMatch(result.stdout.join('\n'), /Diagnostics report written/);
+  assert.equal(existsSync(join(projectRoot, 'reports')), false);
+});
+
+test('build reports a failure when diagnostics.reportFile cannot be written', async () => {
+  const { projectRoot, configPath } = writeConsumerProject();
+  // A regular file where the report's parent directory should be cannot be created as a directory.
+  writeFileSync(join(projectRoot, 'blocker'), 'not a directory');
+  configureDiagnosticsReport(configPath, './blocker/coverage.json');
+
+  const result = await runCli(['build', '--config', configPath]);
+  assert.equal(result.exitCode, 1);
+  assert.equal(result.stdout.length, 0);
+  assert.match(result.stderr.join('\n'), /Could not write diagnostics report to .*blocker/);
+});

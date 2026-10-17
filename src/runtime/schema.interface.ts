@@ -73,6 +73,20 @@ export interface RefSchema {
   readonly name: string;
 }
 
+export interface DateSchema {
+  readonly kind: 'date';
+}
+
+export interface FunctionSchema {
+  readonly kind: 'function';
+}
+
+export interface TemplateLiteralSchema {
+  readonly kind: 'templateLiteral';
+  /** Regex source (sem delimitadores `/`), já ancorado com ^ e $, compatível com `new RegExp(pattern)`. */
+  readonly pattern: string;
+}
+
 export interface UnknownSchema {
   readonly kind: 'unknown';
 }

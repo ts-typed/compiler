@@ -233,7 +233,7 @@ test('a finite template literal type resolves to the exact literal union it deno
   assert.deepEqual(values, ['onClick', 'onHover']);
 });
 
-test('an infinite template literal type is reported unsupported instead of falling back to an open string', () => {
+test('an infinite template literal type is represented as a regex-backed templateLiteral schema', () => {
   const analysis = analyze(
     ['type UserId = `user-${number}`;', 'interface IRef { id: UserId; }', 'const r: IRef = { id: "user-1" };'].join(
       '\n',
@@ -241,8 +241,10 @@ test('an infinite template literal type is reported unsupported instead of falli
   );
 
   const contract = variableContract(analysis, 'r');
-  assert.equal(contract.resolution.status, 'unsupported');
-  assert.equal(contract.resolution.schema, undefined);
+  assert.notEqual(contract.resolution.status, 'unsupported');
+  const definitions = analysis.resolver.getDefinitions();
+  const reference = definitions[contract.resolution.schema.name];
+  assert.deepEqual(reference.properties.id.schema, { kind: 'templateLiteral', pattern: '^user--?\\d+(?:\\.\\d+)?$' });
 });
 
 test('keyof resolves to the exact union of property-name literals', () => {

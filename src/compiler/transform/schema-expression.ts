@@ -119,8 +119,13 @@ export function createSchemaExpression(
     case 'ref':
       properties.push(factory.createPropertyAssignment('name', factory.createStringLiteral(schema.name)));
       break;
+    case 'templateLiteral':
+      properties.push(factory.createPropertyAssignment('pattern', factory.createStringLiteral(schema.pattern)));
+      break;
     case 'unknown':
     case 'never':
+    case 'date':
+    case 'function':
       break;
     default:
       return assertUnreachable(schema);

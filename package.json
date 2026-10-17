@@ -1,6 +1,6 @@
 {
     "name": "@ts-typed/compiler",
-    "version": "0.0.1",
+    "version": "0.1.0",
     "private": false,
     "publishConfig": {
         "access": "public"
@@ -31,7 +31,8 @@
             "require": "./dist/config/index.js",
             "default": "./dist/config/index.js"
         },
-        "./schema.json": "./schema.json"
+        "./schema.json": "./schema.json",
+        "./package.json": "./package.json"
     },
     "files": [
         "dist",

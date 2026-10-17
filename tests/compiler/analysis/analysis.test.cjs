@@ -256,7 +256,6 @@ test('marks unresolved generics and class-specific member syntax unsupported wit
     ['hidden', 'property'],
     ['guarded', 'property'],
     ['shared', 'property'],
-    ['decorated', 'property'],
     ['#secret', 'property'],
     ['instance', 'variable'],
     ['discard', 'return'],
@@ -281,6 +280,34 @@ test('marks unresolved generics and class-specific member syntax unsupported wit
   assert.equal(
     result.diagnostics.find((diagnostic) => diagnostic.name === 'value').code,
     'TT_UNSUPPORTED_TYPE',
+  );
+});
+
+test('a decorated field is resolved from its type like an undecorated one, not blocked by its decorator', () => {
+  // Behavior change: decorators (legacy or TC39) no longer make a member
+  // unsupported. The field's own type decides the resolution, so a plain
+  // `string` decorated field resolves to a schema the same way it would
+  // without the decorator.
+  const project = createProject();
+  replaceSource(project, [
+    'declare function fieldDecorator(_decoratedValue: undefined, context: ClassFieldDecoratorContext): void;',
+    'class Example {',
+    '  @fieldDecorator decorated: string = "decorated";',
+    '  plain: string = "plain";',
+    '}',
+    'export const instance: Example = new Example();',
+  ]);
+
+  const result = analyzeProject(project);
+  const decorated = findContract(result, 'decorated', 'property');
+  const plain = findContract(result, 'plain', 'property');
+  assert.ok(decorated, 'property:decorated');
+  assert.notEqual(decorated.resolution.schema, undefined);
+  assert.equal(decorated.resolution.status, plain.resolution.status);
+  assert.deepEqual(decorated.resolution.schema, plain.resolution.schema);
+  assert.equal(
+    result.diagnostics.some((diagnostic) => diagnostic.name === 'decorated'),
+    false,
   );
 });
 
@@ -363,4 +390,79 @@ test('rejects an incompatible consumer TypeScript with a clear version diagnosti
     () => analyzeProject(project),
     /Unsupported TypeScript 6\.0\.0; ts-typed requires TypeScript >=5\.9 and <6\./,
   );
+});
+
+test('rejects a project configured with strictNullChecks: false (B9)', () => {
+  const projectRoot = mkdtempSync(join(tmpdir(), 'ts-typed-analysis-strict-null-'));
+  const sourceRoot = join(projectRoot, 'src');
+  mkdirSync(sourceRoot, { recursive: true });
+  writeFileSync(
+    join(projectRoot, 'tsconfig.json'),
+    JSON.stringify({
+      compilerOptions: {
+        strict: true,
+        strictNullChecks: false,
+        target: 'ES2022',
+        module: 'CommonJS',
+        skipLibCheck: true,
+        rootDir: './src',
+        outDir: './out',
+      },
+      include: ['src/**/*.ts'],
+    }),
+  );
+  writeFileSync(join(sourceRoot, 'main.ts'), 'const value: string = "ok";\n');
+
+  assert.throws(
+    () => analyzeProject({ tsconfigPath: join(projectRoot, 'tsconfig.json') }),
+    /requires "strictNullChecks": true/,
+  );
+});
+
+test('rejects a project with no strict/strictNullChecks configured at all (B9)', () => {
+  const projectRoot = mkdtempSync(join(tmpdir(), 'ts-typed-analysis-no-strict-'));
+  const sourceRoot = join(projectRoot, 'src');
+  mkdirSync(sourceRoot, { recursive: true });
+  writeFileSync(
+    join(projectRoot, 'tsconfig.json'),
+    JSON.stringify({
+      compilerOptions: {
+        target: 'ES2022',
+        module: 'CommonJS',
+        skipLibCheck: true,
+        rootDir: './src',
+        outDir: './out',
+      },
+      include: ['src/**/*.ts'],
+    }),
+  );
+  writeFileSync(join(sourceRoot, 'main.ts'), 'const value: string = "ok";\n');
+
+  assert.throws(
+    () => analyzeProject({ tsconfigPath: join(projectRoot, 'tsconfig.json') }),
+    /requires "strictNullChecks": true/,
+  );
+});
+
+test('accepts a project with only "strict": true (no explicit strictNullChecks)', () => {
+  const projectRoot = mkdtempSync(join(tmpdir(), 'ts-typed-analysis-strict-implies-'));
+  const sourceRoot = join(projectRoot, 'src');
+  mkdirSync(sourceRoot, { recursive: true });
+  writeFileSync(
+    join(projectRoot, 'tsconfig.json'),
+    JSON.stringify({
+      compilerOptions: {
+        strict: true,
+        target: 'ES2022',
+        module: 'CommonJS',
+        skipLibCheck: true,
+        rootDir: './src',
+        outDir: './out',
+      },
+      include: ['src/**/*.ts'],
+    }),
+  );
+  writeFileSync(join(sourceRoot, 'main.ts'), 'const value: string = "ok";\n');
+
+  assert.doesNotThrow(() => analyzeProject({ tsconfigPath: join(projectRoot, 'tsconfig.json') }));
 });
