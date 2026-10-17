@@ -1,0 +1,4 @@
+export type IntegrationErrorCode =
+  | 'INVALID_INTEGRATION'
+  | 'INTEGRATION_LOAD_FAILED'
+  | 'INCOMPATIBLE_INTEGRATION';

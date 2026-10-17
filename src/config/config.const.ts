@@ -1,0 +1,35 @@
+import type { ProjectConfig } from './config.interface';
+export const DEFAULT_CONFIG: ProjectConfig = {
+  $schema: './node_modules/@ts-typed/compiler/schema.json',
+  integration: 'typescript',
+  extends: null,
+  entry: 'src/main.ts',
+  tsconfig: 'tsconfig.json',
+  outDir: 'dist',
+  allowExtraPropertiesAll: false,
+  compiler: {
+    sourceMap: true,
+    onUnsupported: 'warn',
+    strictClass: false,
+    enforcePrivate: true,
+    enforceReadonly: true,
+  },
+  ncc: {
+    enabled: true,
+    minify: false,
+    sourceMap: true,
+    sourceMapRegister: false,
+    target: 'es2020',
+    externals: [],
+    cache: false,
+    license: null,
+    quiet: false,
+    debugLog: false,
+  },
+  assets: [],
+  diagnostics: {
+    format: 'pretty',
+    coverage: 'summary',
+    reportFile: null,
+  },
+};

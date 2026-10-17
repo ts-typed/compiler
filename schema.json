@@ -1,0 +1,243 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://json.schemastore.org/typets.config.json",
+  "title": "ts-typed project configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "required": ["compiler"],
+        "properties": {
+          "compiler": {
+            "required": ["sourceMap"],
+            "properties": {
+              "sourceMap": { "const": false }
+            }
+          }
+        }
+      },
+      "then": {
+        "required": ["ncc"],
+        "properties": {
+          "ncc": {
+            "required": ["sourceMap"],
+            "properties": {
+              "sourceMap": { "const": false }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "minLength": 1,
+      "description": "JSON Schema path or URI.",
+      "default": "./node_modules/@ts-typed/compiler/schema.json"
+    },
+    "integration": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Built-in integration name, package name or relative adapter module.",
+      "default": "typescript"
+    },
+    "extends": {
+      "anyOf": [
+        { "type": "string", "minLength": 1 },
+        { "type": "null" }
+      ],
+      "description": "Configuration file to inherit, resolved from the declaring file.",
+      "default": null
+    },
+    "entry": {
+      "type": "string",
+      "minLength": 1,
+      "description": "TypeScript entry file, resolved from the declaring configuration.",
+      "default": "src/main.ts"
+    },
+    "tsconfig": {
+      "type": "string",
+      "minLength": 1,
+      "description": "TypeScript configuration file, resolved from the declaring configuration.",
+      "default": "tsconfig.json"
+    },
+    "outDir": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Output directory, resolved from the declaring configuration.",
+      "default": "dist"
+    },
+    "allowExtraPropertiesAll": {
+      "type": "boolean",
+      "description": "Allow unknown runtime object properties globally without relaxing config keys.",
+      "default": false
+    },
+    "compiler": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Instrumented TypeScript compiler output options.",
+      "properties": {
+        "sourceMap": {
+          "type": "boolean",
+          "description": "Emit compiler source maps.",
+          "default": true
+        },
+        "onUnsupported": {
+          "enum": ["warn", "error"],
+          "description": "How to handle unsupported or partially protected contracts.",
+          "default": "warn"
+        },
+        "strictClass": {
+          "type": "boolean",
+          "description": "Default validation mode for class-typed contracts: false validates structurally, like an equivalent interface (matching TypeScript's own structural typing); true requires instanceof wherever the compiler can embed a live reference to the class (same file as the validation point). Override per class with @StrictClass()/@StructuralClass().",
+          "default": false
+        },
+        "enforcePrivate": {
+          "type": "boolean",
+          "description": "Rewrite TypeScript `private` class fields into real ECMAScript `#private` fields (TypeScript's own `private` has no runtime effect; the field stays reflectively public). Fails the build if any field being converted is accessed through bracket notation anywhere in the program, since that pattern has no `#private` equivalent.",
+          "default": true
+        },
+        "enforceReadonly": {
+          "type": "boolean",
+          "description": "Lock `readonly` class fields against further writes after their first validated assignment, instead of leaving them as an ordinary writable runtime property.",
+          "default": true
+        }
+      },
+      "default": {
+        "sourceMap": true,
+        "onUnsupported": "warn",
+        "strictClass": false,
+        "enforcePrivate": true,
+        "enforceReadonly": true
+      }
+    },
+    "ncc": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Validated bundler options.",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Enable ncc bundling.",
+          "default": true
+        },
+        "minify": {
+          "type": "boolean",
+          "description": "Minify the bundle.",
+          "default": false
+        },
+        "sourceMap": {
+          "type": "boolean",
+          "description": "Emit bundle source maps; compiler source maps must also be enabled.",
+          "default": true
+        },
+        "sourceMapRegister": {
+          "type": "boolean",
+          "description": "Include ncc source map registration.",
+          "default": false
+        },
+        "target": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Bundle JavaScript target.",
+          "default": "es2020"
+        },
+        "externals": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "description": "External module names required at runtime.",
+          "default": []
+        },
+        "cache": {
+          "type": "boolean",
+          "description": "Enable bundler cache.",
+          "default": false
+        },
+        "license": {
+          "anyOf": [
+            { "type": "string", "minLength": 1 },
+            { "type": "null" }
+          ],
+          "description": "License output filename, or null to disable it.",
+          "default": null
+        },
+        "quiet": {
+          "type": "boolean",
+          "description": "Suppress ncc logs.",
+          "default": false
+        },
+        "debugLog": {
+          "type": "boolean",
+          "description": "Enable ncc debug logs.",
+          "default": false
+        }
+      },
+      "default": {
+        "enabled": true,
+        "minify": false,
+        "sourceMap": true,
+        "sourceMapRegister": false,
+        "target": "es2020",
+        "externals": [],
+        "cache": false,
+        "license": null,
+        "quiet": false,
+        "debugLog": false
+      }
+    },
+    "assets": {
+      "type": "array",
+      "description": "Assets copied into the output directory.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "from": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Source path or glob, resolved from the declaring configuration."
+          },
+          "to": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Destination relative to outDir; parent escapes are rejected."
+          }
+        },
+        "required": ["from", "to"]
+      },
+      "default": []
+    },
+    "diagnostics": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Diagnostic presentation and report options.",
+      "properties": {
+        "format": {
+          "enum": ["pretty", "json"],
+          "description": "Diagnostic output format.",
+          "default": "pretty"
+        },
+        "coverage": {
+          "enum": ["summary", "detailed"],
+          "description": "Coverage report detail without changing validation rigor.",
+          "default": "summary"
+        },
+        "reportFile": {
+          "anyOf": [
+            { "type": "string", "minLength": 1 },
+            { "type": "null" }
+          ],
+          "description": "Manifest JSON path, resolved from the declaring configuration, or null.",
+          "default": null
+        }
+      },
+      "default": {
+        "format": "pretty",
+        "coverage": "summary",
+        "reportFile": null
+      }
+    }
+  }
+}

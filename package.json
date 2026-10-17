@@ -1,0 +1,58 @@
+{
+    "name": "@ts-typed/compiler",
+    "version": "0.0.1",
+    "private": false,
+    "publishConfig": {
+        "access": "public"
+    },
+    "description": "Runtime protection for TypeScript contracts",
+    "license": "Apache-2.0",
+    "engines": {
+        "node": ">=22"
+    },
+    "main": "dist/index.js",
+    "types": "dist/index.d.ts",
+    "bin": {
+        "ts-typed": "dist/cli/index.js"
+    },
+    "exports": {
+        ".": {
+            "types": "./dist/index.d.ts",
+            "require": "./dist/index.js",
+            "default": "./dist/index.js"
+        },
+        "./integration": {
+            "types": "./dist/integration/index.d.ts",
+            "require": "./dist/integration/index.js",
+            "default": "./dist/integration/index.js"
+        },
+        "./config": {
+            "types": "./dist/config/index.d.ts",
+            "require": "./dist/config/index.js",
+            "default": "./dist/config/index.js"
+        },
+        "./schema.json": "./schema.json"
+    },
+    "files": [
+        "dist",
+        "scripts",
+        "schema.json",
+        "LICENSE",
+        "NOTICE",
+        "README.md",
+        "CHANGELOG.md"
+    ],
+    "scripts": {
+        "typecheck": "tsc --noEmit",
+        "build": "tsc",
+        "test": "npm run build && node --test --test-concurrency=1",
+        "postinstall": "node scripts/postinstall.cjs",
+        "prepack": "node ../scripts/prepare-package.mjs"
+    },
+    "dependencies": {
+        "@vercel/ncc": "0.38.4"
+    },
+    "peerDependencies": {
+        "typescript": ">=5.9 <6"
+    }
+}

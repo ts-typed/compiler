@@ -1,0 +1,6 @@
+export type StrictTypeErrorCode =
+  | 'TYPE_MISMATCH'
+  | 'EXTRA_PROPERTY'
+  | 'REQUIRED_PROPERTY'
+  | 'READONLY_PROPERTY'
+  | 'INVALID_MUTATION';
