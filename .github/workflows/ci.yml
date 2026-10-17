@@ -39,26 +39,32 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
-      - name: Read package version
+      - name: Read package name and version
         id: pkg
-        run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
-      - name: Check whether this version is already tagged
-        id: tag
         run: |
-          if git ls-remote --tags origin "refs/tags/v${{ steps.pkg.outputs.version }}" | grep -q .; then
+          echo "name=$(node -p "require('./package.json').name")" >> "$GITHUB_OUTPUT"
+          echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+      - name: Check whether this version is already published on npm
+        id: published
+        run: |
+          if npm view "${{ steps.pkg.outputs.name }}@${{ steps.pkg.outputs.version }}" version >/dev/null 2>&1; then
             echo "exists=true" >> "$GITHUB_OUTPUT"
           else
             echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
-      - name: Tag the release
-        if: steps.tag.outputs.exists == 'false'
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag "v${{ steps.pkg.outputs.version }}"
-          git push origin "v${{ steps.pkg.outputs.version }}"
+      # npm's registry is the source of truth for "already released", not the
+      # git tag: a tag can exist from a run that reached this point but then
+      # failed to publish (for example, a missing/expired token), which must
+      # not permanently block every future publish attempt for that version.
       - name: Publish to npm
-        if: steps.tag.outputs.exists == 'false'
+        if: steps.published.outputs.exists == 'false'
         run: npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Tag the release
+        if: steps.published.outputs.exists == 'false'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -f "v${{ steps.pkg.outputs.version }}"
+          git push origin "v${{ steps.pkg.outputs.version }}" --force
