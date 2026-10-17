@@ -46,13 +46,16 @@
         "typecheck": "tsc --noEmit",
         "build": "tsc",
         "test": "npm run build && node --test --test-concurrency=1",
-        "postinstall": "node scripts/postinstall.cjs",
-        "prepack": "node ../scripts/prepare-package.mjs"
+        "postinstall": "node scripts/postinstall.cjs"
     },
     "dependencies": {
         "@vercel/ncc": "0.38.4"
     },
     "peerDependencies": {
         "typescript": ">=5.9 <6"
+    },
+    "devDependencies": {
+        "@types/node": "^22.15.21",
+        "typescript": "5.9.3"
     }
 }
