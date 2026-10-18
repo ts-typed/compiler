@@ -58,6 +58,12 @@ interface FileTransformState {
   readonly commonJsOutput: boolean;
   /** Guard installs for top-level exported `let`/`var` bindings, placed right after the runtime prelude. */
   readonly exportGuardStatements: ts.Statement[];
+  /**
+   * Module namespaces this file binds for `valueObjectCtor` references to
+   * ValueObject classes imported from another file, keyed by the original
+   * module specifier. Bound in the prelude, like the runtime import.
+   */
+  readonly valueObjectModules: Map<string, ts.Identifier>;
 }
 
 export function createContractTransformer(
@@ -88,6 +94,7 @@ export function createContractTransformer(
           : new Map<ts.Symbol, PrivateConversion>(),
         commonJsOutput: isCommonJsOutput(sourceFile, context.getCompilerOptions(), typescript),
         exportGuardStatements: [],
+        valueObjectModules: new Map<string, ts.Identifier>(),
       };
       stateOptions.set(state, options);
 
@@ -757,6 +764,11 @@ function visitFunctionLike(
   return updateFunctionLike(factory, typescript, node, parameters, body);
 }
 
+/** Whether a schema is a reference to a named definition backed by a ValueObject class. */
+function isValueObjectRefSchema(schema: Schema, state: FileTransformState): boolean {
+  return schema.kind === 'ref' && optionsForState(state).analysis.resolver.isValueObjectClass(schema.name);
+}
+
 function createParameterGuards(
   parameters: readonly ts.ParameterDeclaration[],
   originalParameters: readonly ts.ParameterDeclaration[],
@@ -783,16 +795,20 @@ function createParameterGuards(
       continue;
     }
     state.handledContracts.add(descriptor);
+    const protectCall = createProtectCall(
+      factory,
+      state,
+      descriptor.resolution.schema,
+      parameter.name,
+      descriptor,
+      'argument',
+    );
+    // A ValueObject parameter is replaced by the instance the guard builds from
+    // a raw string. Other guards only validate, so their result is discarded.
+    const replacesParameter = isValueObjectRefSchema(descriptor.resolution.schema, state);
     statements.push(
       factory.createExpressionStatement(
-        createProtectCall(
-          factory,
-          state,
-          descriptor.resolution.schema,
-          parameter.name,
-          descriptor,
-          'argument',
-        ),
+        replacesParameter ? factory.createAssignment(parameter.name, protectCall) : protectCall,
       ),
     );
   }
@@ -1711,6 +1727,21 @@ function createDefinitionSchemaExpression(
     return { expression: base };
   }
 
+  // ValueObject subclasses are handled before the instanceOf path below. That
+  // path returns early for a class declared in another file, which is exactly
+  // the case a ValueObject is meant to support.
+  if (options.analysis.resolver.isValueObjectClass(definitionName)) {
+    return createValueObjectDefinitionExpression(
+      classSymbol,
+      base,
+      transformedStatements,
+      state,
+      factory,
+      typescript,
+      options,
+    );
+  }
+
   const declaration = classSymbol.valueDeclaration ?? classSymbol.declarations?.[0];
   const isSameFile = declaration !== undefined
     && declaration.getSourceFile().fileName === state.sourceFile.fileName;
@@ -1749,6 +1780,160 @@ function createDefinitionSchemaExpression(
   return { expression, deferAfterStatementIndex: topLevelIndex };
 }
 
+/**
+ * Embeds `valueObjectCtor` for a ValueObject subclass. Unlike `instanceOf`,
+ * this works for a class declared in another file. An imported binding is
+ * initialized before the importing module runs, so it is safe to reference
+ * from the prelude. The import is re-bound through a synthesized namespace
+ * import, because TypeScript elides original imports that are used only as
+ * types and the reference added here is invisible to that check. A
+ * same-file class is referenced directly and deferred until after its
+ * declaration, as `instanceOf` is.
+ *
+ * When neither route applies, the definition falls back to `unknown`, which
+ * performs no check. That is the same outcome as the unsupported class
+ * shape it would otherwise produce, and it avoids rejecting valid raw strings.
+ */
+function createValueObjectDefinitionExpression(
+  classSymbol: ts.Symbol,
+  base: ts.Expression,
+  transformedStatements: readonly ts.Statement[],
+  state: FileTransformState,
+  factory: ts.NodeFactory,
+  typescript: typeof import('typescript'),
+  options: ContractTransformerOptions,
+): DefinitionSchemaResult {
+  const className = classSymbol.getName();
+  const declaration = classSymbol.valueDeclaration ?? classSymbol.declarations?.[0];
+  const isSameFile = declaration !== undefined
+    && declaration.getSourceFile().fileName === state.sourceFile.fileName;
+
+  let constructorExpression: ts.Expression | undefined;
+  let deferAfterStatementIndex: number | undefined;
+  let limitation: string | undefined;
+
+  if (isSameFile) {
+    const topLevelIndex = transformedStatements.findIndex(
+      (statement) => typescript.isClassDeclaration(statement) && statement.name?.text === className,
+    );
+    if (topLevelIndex === -1) {
+      limitation = 'it is not a top-level declaration in this file';
+    } else {
+      constructorExpression = factory.createIdentifier(className);
+      deferAfterStatementIndex = topLevelIndex;
+    }
+  } else {
+    const reference = findNamedImportOfClass(classSymbol, state, options, typescript);
+    if (reference === undefined) {
+      limitation = 'it is not imported by name into this file (it is reached only through inference or a namespace import)';
+    } else {
+      let moduleIdentifier = state.valueObjectModules.get(reference.moduleSpecifier);
+      if (moduleIdentifier === undefined) {
+        moduleIdentifier = factory.createUniqueName('__tsTypedValueObjectModule');
+        state.valueObjectModules.set(reference.moduleSpecifier, moduleIdentifier);
+      }
+      constructorExpression = factory.createElementAccessExpression(
+        moduleIdentifier,
+        factory.createStringLiteral(reference.exportName),
+      );
+    }
+  }
+
+  if (constructorExpression === undefined) {
+    const declarationFileName = declaration?.getSourceFile().fileName;
+    if (
+      declarationFileName !== undefined &&
+      (isSameFile || importsFromFile(declarationFileName, state, options, typescript))
+    ) {
+      reportClassValidationLimit(
+        options,
+        state,
+        className,
+        `ValueObject class ${className} cannot be auto-constructed at this point because ${limitation}. Values of this type are not validated at the boundary.`,
+      );
+    }
+    return { expression: createSchemaExpression(typescript, factory, { kind: 'unknown' }) };
+  }
+
+  const expression = factory.createObjectLiteralExpression([
+    ...(base as ts.ObjectLiteralExpression).properties,
+    factory.createPropertyAssignment('valueObjectCtor', constructorExpression),
+  ]);
+  return {
+    expression,
+    ...(deferAfterStatementIndex === undefined ? {} : { deferAfterStatementIndex }),
+  };
+}
+
+interface ValueObjectImportReference {
+  readonly moduleSpecifier: string;
+  readonly exportName: string;
+}
+
+/**
+ * Finds a value (non-type-only) named import in this file that binds the given
+ * class, so the class can be reached at runtime under its exported name.
+ */
+function findNamedImportOfClass(
+  classSymbol: ts.Symbol,
+  state: FileTransformState,
+  options: ContractTransformerOptions,
+  typescript: typeof import('typescript'),
+): ValueObjectImportReference | undefined {
+  const checker = options.analysis.checker;
+  for (const statement of state.sourceFile.statements) {
+    if (
+      !typescript.isImportDeclaration(statement) ||
+      statement.importClause === undefined ||
+      statement.importClause.isTypeOnly ||
+      !typescript.isStringLiteral(statement.moduleSpecifier)
+    ) {
+      continue;
+    }
+    const bindings = statement.importClause.namedBindings;
+    if (bindings === undefined || !typescript.isNamedImports(bindings)) {
+      continue;
+    }
+    for (const element of bindings.elements) {
+      if (element.isTypeOnly) {
+        continue;
+      }
+      const local = checker.getSymbolAtLocation(element.name);
+      if (local === undefined) {
+        continue;
+      }
+      const target = (local.flags & typescript.SymbolFlags.Alias) !== 0 ? checker.getAliasedSymbol(local) : local;
+      const isSameClass = target === classSymbol
+        || (target.valueDeclaration !== undefined && target.valueDeclaration === classSymbol.valueDeclaration);
+      if (isSameClass) {
+        return {
+          moduleSpecifier: statement.moduleSpecifier.text,
+          exportName: (element.propertyName ?? element.name).text,
+        };
+      }
+    }
+  }
+  return undefined;
+}
+
+/** Whether this file has a value import from the module that declares the given file. */
+function importsFromFile(
+  declarationFileName: string,
+  state: FileTransformState,
+  options: ContractTransformerOptions,
+  typescript: typeof import('typescript'),
+): boolean {
+  return state.sourceFile.statements.some((statement) => {
+    if (!typescript.isImportDeclaration(statement) || statement.importClause?.isTypeOnly === true) {
+      return false;
+    }
+    const moduleSymbol = options.analysis.checker.getSymbolAtLocation(statement.moduleSpecifier);
+    return (moduleSymbol?.getDeclarations() ?? []).some(
+      (declaration) => declaration.getSourceFile().fileName === declarationFileName,
+    );
+  });
+}
+
 function reportClassValidationLimit(
   options: ContractTransformerOptions,
   state: FileTransformState,
@@ -1777,7 +1962,8 @@ function addRuntimePrelude(
   options: ContractTransformerOptions,
   context: ts.TransformationContext,
 ): ts.SourceFile {
-  const runtimeImport = isEsModuleOutput(sourceFile, context.getCompilerOptions(), typescript)
+  const isEsm = isEsModuleOutput(sourceFile, context.getCompilerOptions(), typescript);
+  const runtimeImport = isEsm
     ? createRuntimeImportDeclaration(state, factory)
     : createRuntimeRequireStatement(state, factory, typescript);
   const registryDeclaration = factory.createVariableStatement(
@@ -1829,8 +2015,12 @@ function addRuntimePrelude(
   }
 
   const lastImportIndex = findLastImportIndex(typescript, sourceFile.statements);
+  const valueObjectModuleStatements = [...state.valueObjectModules].map(([specifier, identifier]) =>
+    createValueObjectModuleStatement(specifier, identifier, isEsm, factory, typescript),
+  );
   const prelude = [
     runtimeImport,
+    ...valueObjectModuleStatements,
     registryDeclaration,
     ...immediateDefinitionStatements,
     ...state.exportGuardStatements,
@@ -1951,6 +2141,42 @@ function createRuntimeRequireStatement(
             factory.createIdentifier('require'),
             undefined,
             [factory.createStringLiteral(state.runtimeModule)],
+          ),
+        ),
+      ],
+      typescript.NodeFlags.Const,
+    ),
+  );
+}
+
+/** Binds a module namespace for ValueObject references, mirroring the runtime import form for the file's output format. */
+function createValueObjectModuleStatement(
+  moduleSpecifier: string,
+  identifier: ts.Identifier,
+  isEsm: boolean,
+  factory: ts.NodeFactory,
+  typescript: typeof import('typescript'),
+): ts.Statement {
+  if (isEsm) {
+    return factory.createImportDeclaration(
+      undefined,
+      factory.createImportClause(false, undefined, factory.createNamespaceImport(identifier)),
+      factory.createStringLiteral(moduleSpecifier),
+      undefined,
+    );
+  }
+  return factory.createVariableStatement(
+    undefined,
+    factory.createVariableDeclarationList(
+      [
+        factory.createVariableDeclaration(
+          identifier,
+          undefined,
+          undefined,
+          factory.createCallExpression(
+            factory.createIdentifier('require'),
+            undefined,
+            [factory.createStringLiteral(moduleSpecifier)],
           ),
         ),
       ],

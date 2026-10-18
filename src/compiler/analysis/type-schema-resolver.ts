@@ -9,6 +9,18 @@ const ALIAS_LIMIT_REASON =
 const MAP_NAMES: ReadonlySet<string> = new Set(['Map', 'ReadonlyMap']);
 const SET_NAMES: ReadonlySet<string> = new Set(['Set', 'ReadonlySet']);
 
+/**
+ * Path heuristic for the runtime `ValueObject` declaration. See
+ * `_isValueObjectBase` for why this is a path check rather than package identity.
+ */
+function isValueObjectRuntimePath(fileName: string): boolean {
+  const normalized = fileName.replace(/\\/g, '/');
+  if (normalized.endsWith('/runtime/value-object.class.ts')) {
+    return true;
+  }
+  return normalized.endsWith('/runtime/value-object.class.d.ts') && normalized.includes('/@ts-typed/compiler/');
+}
+
 function escapeRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
@@ -26,6 +38,7 @@ export class TypeSchemaResolver {
   private readonly _definitionTypes = new Map<string, ts.Type>();
   private readonly _resolvingDefinitions = new Set<ts.Type>();
   private readonly _classSymbolsByDefinitionName = new Map<string, ts.Symbol>();
+  private readonly _valueObjectDefinitionNames = new Set<string>();
 
   public constructor(
     private readonly _typescript: typeof import('typescript'),
@@ -49,6 +62,16 @@ export class TypeSchemaResolver {
    */
   public getClassSymbol(definitionName: string): ts.Symbol | undefined {
     return this._classSymbolsByDefinitionName.get(definitionName);
+  }
+
+  /**
+   * Whether a named object definition is backed by a class that extends the
+   * `ValueObject` runtime base, directly or through any number of intermediate
+   * subclasses. The transformer uses this to embed a live `valueObjectCtor`
+   * reference so raw strings are auto-constructed into instances.
+   */
+  public isValueObjectClass(definitionName: string): boolean {
+    return this._valueObjectDefinitionNames.has(definitionName);
   }
 
   private _resolveType(type: ts.Type, node: ts.Node, canCreateDefinition: boolean): SchemaResolution {
@@ -392,6 +415,9 @@ export class TypeSchemaResolver {
     const classSymbol = this._getClassSymbol(type);
     if (classSymbol !== undefined) {
       this._classSymbolsByDefinitionName.set(definitionName, classSymbol);
+      if (this._isValueObjectType(type)) {
+        this._valueObjectDefinitionNames.add(definitionName);
+      }
     }
     this._definitionResolutions.set(type, resolution);
     return resolution;
@@ -535,6 +561,16 @@ export class TypeSchemaResolver {
   private _resolveObject(type: ts.Type, node: ts.Node): CompoundResolution {
     if (type.getCallSignatures().length > 0 || type.getConstructSignatures().length > 0) {
       return this._unsupported('Callable and constructable contracts are not represented by object schemas.');
+    }
+    // A ValueObject subclass is validated by identity (`instanceof` against its
+    // constructor), never by its members. Its own methods and the inherited
+    // String members are therefore not walked as properties at all.
+    if (this._isValueObjectType(type)) {
+      return {
+        status: 'partial',
+        schema: { kind: 'object', properties: {} },
+        reason: ALIAS_LIMIT_REASON,
+      };
     }
 
     // A class reference is validated the same as any other structural object
@@ -714,6 +750,49 @@ export class TypeSchemaResolver {
       ?.getDeclarations()
       ?.some((declaration) => this._typescript.isClassDeclaration(declaration)) === true;
     return hasClassDeclaration ? symbol : undefined;
+  }
+
+  /**
+   * True when the class type has `ValueObject` somewhere in its base-class
+   * chain. Walks every ancestor, not just the immediate parent. The `visited`
+   * set only guards against a malformed cycle; valid TypeScript cannot produce
+   * one, so there is no artificial depth limit.
+   */
+  private _isValueObjectType(type: ts.Type): boolean {
+    return this._extendsValueObject(type, new Set<ts.Type>());
+  }
+
+  private _extendsValueObject(type: ts.Type, visited: Set<ts.Type>): boolean {
+    if (visited.has(type) || !type.isClassOrInterface()) {
+      return false;
+    }
+    visited.add(type);
+    for (const baseType of this._checker.getBaseTypes(type)) {
+      if (this._isValueObjectBase(baseType) || this._extendsValueObject(baseType, visited)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Provenance check for the `ValueObject` base itself. The name alone is not
+   * trusted: a user class named `ValueObject` must not match. The declaration
+   * must be a class in this package's runtime file. This package's own source
+   * (`runtime/value-object.class.ts`) or its installed declaration
+   * (`runtime/value-object.class.d.ts` under `@ts-typed/compiler/`) both match.
+   * This is a path heuristic, not a full package-identity check.
+   */
+  private _isValueObjectBase(baseType: ts.Type): boolean {
+    const symbol = baseType.getSymbol();
+    if (symbol === undefined || symbol.getName() !== 'ValueObject') {
+      return false;
+    }
+    return (symbol.getDeclarations() ?? []).some(
+      (declaration) =>
+        this._typescript.isClassDeclaration(declaration) &&
+        isValueObjectRuntimePath(declaration.getSourceFile().fileName),
+    );
   }
 
   private _unsupported(reason: string): SchemaResolution & { readonly status: 'unsupported' } {

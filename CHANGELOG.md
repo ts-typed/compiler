@@ -4,6 +4,29 @@ All notable changes to `@ts-typed/compiler` are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.1.21] - 2026-10-18
+
+### Added
+
+- Step 3/3, completing the auto-constructed value types feature end to end: the compiler now recognizes, in real TypeScript source, when a declared type is a class extending `ValueObject` — **including when that class is imported from a different file or package** (the realistic case: a concrete type like a document-number value object typically lives in its own module, not the file using it) — and embeds a live reference to it in the emitted schema automatically. No manual schema authoring is needed anymore: declaring a parameter, variable, or class field with a `ValueObject` subclass as its type is now enough on its own.
+
+  ```ts
+  // value-objects.ts
+  export class CPF extends ValueObject {
+    protected isValid(raw: string): boolean { /* ... */ }
+    public masked(): string { /* ... */ }
+  }
+
+  // app.ts
+  import { CPF } from './value-objects';
+  function searchByCPF(cpf: CPF) { console.log(cpf.masked()); }
+  searchByCPF('12345678901'); // auto-constructs a CPF instance, no `new CPF(...)` anywhere
+  ```
+
+  Detection walks the full base-class chain (so a class extending an intermediate subclass of `ValueObject` is still recognized, not just a direct subclass), and verifies the matched ancestor is genuinely this package's own `ValueObject` export (by declaration file path), not a coincidentally same-named class. A `ValueObject` subclass's own methods/fields are never walked as structural properties — the schema treats the whole class as an opaque, already-correct unit once detected. The existing `compiler.strictClass`/`instanceOf` mechanism (same-file classes only) is completely unchanged; this new mechanism has its own, looser scoping rules since it needs to work for an imported class.
+
+  **Known limitations, not covered by this release**: a class reached through a symlinked/workspace `node_modules` install (common in some monorepo setups) is not detected — the heuristic looks for `@ts-typed/compiler` in the resolved file's real path, which a symlink can route around; this currently fails SILENTLY (the class falls back to ordinary, unsupported class resolution) rather than with a diagnostic, a gap worth tightening in a follow-up. A `ValueObject` subclass reached only through inference, a namespace import, or NOT imported by name into the file resolving it, is not detected either. `CPF | undefined` (a union including a `ValueObject` type) does not auto-construct — only a direct, non-union reference does. A cyclic ES module import involving the `ValueObject` subclass's own module is unhandled.
+
 ## [0.1.20] - 2026-10-18
 
 ### Added
