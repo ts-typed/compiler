@@ -4,6 +4,14 @@ All notable changes to `@ts-typed/compiler` are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.1.14] - 2026-10-18
+
+### Added
+
+- `GENERIC_TRANSPORT`'s call-site validation now also covers the RETURN side of a plain `async` function called with an explicit type argument (`identityAsync<Person>(x)`). Previously, an async callee's return was skipped entirely (the instantiated return type is `Promise<X>`, and wrapping the whole call in `protectValue` would validate the Promise object itself, not `X`) — the fix instead extracts `X` via the same generic-reference unwrapping helper already used for `Generator<T, ...>`/`Iterable<T>`, and chains `.then((resolved) => protectValue(schema, resolved, context))` onto the call. The expression's own type is unaffected — it's still a `Promise`, so code that chains `.then()` on it elsewhere, or never awaits it at all, keeps working exactly as before. A failed check now REJECTS the chained promise (consistent with how any other failure inside an async operation surfaces), rather than throwing synchronously — `await identityAsync<Person>(bad)` throws at the `await`, same as any other rejected promise.
+
+  **Known limitation, not covered by this release:** generators (`function*`, `async function*`) still have no call-site return validation — a generator's call doesn't produce a single return value the same way, it produces an iterator; checking what it YIELDS would mean intercepting the returned iterator's own `.next()` calls, a materially bigger, separate problem left for a future release if it turns out to matter in practice.
+
 ## [0.1.13] - 2026-10-18
 
 ### Added

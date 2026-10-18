@@ -2443,11 +2443,21 @@ function guardExplicitGenericCall(
   }
 
   const functionDeclaration = declaration as ts.FunctionLikeDeclaration;
-  const isAsyncOrGenerator = hasModifier(typescript, functionDeclaration, typescript.SyntaxKind.AsyncKeyword) ||
-    functionDeclaration.asteriskToken !== undefined;
-  const returnSchema = isAsyncOrGenerator
+  const isAsync = hasModifier(typescript, functionDeclaration, typescript.SyntaxKind.AsyncKeyword);
+  // Generators (`function*` and `async function*`) are not validated on the return side yet.
+  const isGenerator = functionDeclaration.asteriskToken !== undefined;
+  // For a plain `async` callee the call's type is `Promise<X>`; the check targets `X` once it resolves.
+  let resolvedReturnType: ts.Type | undefined;
+  if (isGenerator) {
+    resolvedReturnType = undefined;
+  } else if (isAsync) {
+    resolvedReturnType = getTypeArgumentAt(checker, typescript, signature.getReturnType(), 0);
+  } else {
+    resolvedReturnType = signature.getReturnType();
+  }
+  const returnSchema = resolvedReturnType === undefined
     ? undefined
-    : resolveProtectedCallSchema(signature.getReturnType(), node, state, typescript);
+    : resolveProtectedCallSchema(resolvedReturnType, node, state, typescript);
 
   if (!guardedArguments && returnSchema === undefined) {
     return visited;
@@ -2462,14 +2472,33 @@ function guardExplicitGenericCall(
   const calleeName = typescript.isIdentifier(visited.expression)
     ? visited.expression.text
     : visited.expression.getText(state.sourceFile);
-  return createProtectCall(
-    factory,
-    state,
-    returnSchema,
-    call,
-    { kind: 'return', name: calleeName },
-    'return',
-    calleeName,
+  const returnDescriptor = { kind: 'return', name: calleeName };
+  if (!isAsync) {
+    return createProtectCall(factory, state, returnSchema, call, returnDescriptor, 'return', calleeName);
+  }
+  // `call.then((resolved) => protectValue(schema, resolved, ctx))`: the expression stays a Promise,
+  // and a failing check rejects the chained promise (the same way the call's own promise rejects).
+  const resolvedParameter = '__tsTypedResolved';
+  const validateResolved = factory.createArrowFunction(
+    undefined,
+    undefined,
+    [factory.createParameterDeclaration(undefined, undefined, resolvedParameter)],
+    undefined,
+    factory.createToken(typescript.SyntaxKind.EqualsGreaterThanToken),
+    createProtectCall(
+      factory,
+      state,
+      returnSchema,
+      factory.createIdentifier(resolvedParameter),
+      returnDescriptor,
+      'return',
+      calleeName,
+    ),
+  );
+  return factory.createCallExpression(
+    factory.createPropertyAccessExpression(call, 'then'),
+    undefined,
+    [validateResolved],
   );
 }
 

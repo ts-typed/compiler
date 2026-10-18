@@ -151,3 +151,96 @@ test('ordinary non-generic calls are unaffected and still validated by the calle
   ]);
   assert.deepEqual(results, ['3', 'strict:callee-arg:parameter:argument']);
 });
+
+function runAsyncScenario(lines) {
+  return emitAndRun(
+    [
+      ...PROLOGUE,
+      'async function recordAsync(name: string, action: () => unknown): Promise<void> {',
+      '  try {',
+      '    await action();',
+      '    results.push(`ok:${name}`);',
+      '  } catch (error) {',
+      '    if (error instanceof StrictTypeError) {',
+      '      results.push(`strict:${name}:${error.contractKind}:${error.operation}`);',
+      '      return;',
+      '    }',
+      '    throw error;',
+      '  }',
+      '}',
+      'async function main(): Promise<void> {',
+      ...lines,
+      '}',
+      'main().then(() => process.stdout.write(results.join(",")));',
+    ].join('\n'),
+  );
+}
+
+test('async explicit identityAsync<Person> resolves to the valid value', async () => {
+  const results = runAsyncScenario([
+    'async function identityAsync<T>(x: T): Promise<T> { return x; }',
+    'const good: Person = { name: "Ada", age: 36 };',
+    'const resolved = await identityAsync<Person>(good);',
+    'results.push(resolved === good ? "same" : "different");',
+  ]);
+  assert.deepEqual(results, ['same']);
+});
+
+test('async explicit call validates the resolved value and rejects with a return StrictTypeError', async () => {
+  const results = runAsyncScenario([
+    // Argument is `unknown`, so only the resolved return value is wrong (a number, not a string).
+    'async function liarAsync<T>(x: unknown): Promise<T> { return x as T; }',
+    'const asyncNumber: Promise<number> = Promise.resolve(1);',
+    'await recordAsync("async-return", () => liarAsync<string>(asyncNumber));',
+    'await recordAsync("async-valid", () => liarAsync<number>(asyncNumber));',
+  ]);
+  assert.deepEqual(results, ['strict:async-return:return:return', 'ok:async-valid']);
+});
+
+test('async explicit call still returns a Promise before it is awaited', async () => {
+  const results = runAsyncScenario([
+    'async function identityAsync<T>(x: T): Promise<T> { return x; }',
+    'const good: Person = { name: "Ada", age: 36 };',
+    'const pending = identityAsync<Person>(good);',
+    'results.push(pending instanceof Promise ? "promise" : "not-promise");',
+    'results.push(typeof pending.then === "function" ? "has-then" : "no-then");',
+    'await pending;',
+  ]);
+  assert.deepEqual(results, ['promise', 'has-then']);
+});
+
+test('async call without explicit type arguments is not guarded at the call site', async () => {
+  const results = runAsyncScenario([
+    'async function identityAsync<T>(x: T): Promise<T> { return x; }',
+    'const bad = { name: "Ada", age: "old" };',
+    'await recordAsync("async-inferred", async () => {',
+    '  if ((await identityAsync(bad)) !== bad) throw new Error("changed");',
+    '});',
+  ]);
+  assert.deepEqual(results, ['ok:async-inferred']);
+});
+
+test('async generator with explicit type arguments is not return-validated', async () => {
+  const results = runAsyncScenario([
+    // Same lying-return shape as above, but as an async generator: the yielded value is not checked.
+    'async function* yielder<T>(x: unknown): AsyncGenerator<T> { yield x as T; }',
+    'const iterator = yielder<string>(1);',
+    'results.push(String((await iterator.next()).value));',
+  ]);
+  assert.deepEqual(results, ['1']);
+});
+
+test('async explicit call checks the argument synchronously and the return asynchronously', async () => {
+  const results = runAsyncScenario([
+    'async function pick<T>(x: Person): Promise<T> { return x as unknown as T; }',
+    'const bad = { name: "Ada", age: "old" } as any;',
+    'const good: Person = { name: "Ada", age: 36 };',
+    // Bad argument: the argument check throws synchronously, before the call returns a Promise.
+    'let threw = false;',
+    'try { pick<string>(bad); } catch (error) { threw = error instanceof StrictTypeError && error.contractKind === "parameter"; }',
+    'results.push(threw ? "sync-argument" : "no-sync-argument");',
+    // Valid argument: the call returns a Promise and the wrong resolved value rejects it.
+    'await recordAsync("async-both-return", () => pick<string>(good));',
+  ]);
+  assert.deepEqual(results, ['sync-argument', 'strict:async-both-return:return:return']);
+});
