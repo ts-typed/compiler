@@ -1880,12 +1880,20 @@ function findNamedImportOfClass(
   options: ContractTransformerOptions,
   typescript: typeof import('typescript'),
 ): ValueObjectImportReference | undefined {
+  // A ValueObject subclass is used purely as a TYPE annotation at every call
+  // site (that's the whole point of auto-construction: no `new CPF(...)` in
+  // source) — so its import is commonly `import type { CPF } from '...'`, or
+  // an individual `import { type CPF } from '...'` specifier. Either form is
+  // elided by TypeScript's own emit (nothing references it as a value), but
+  // that's irrelevant here: `createValueObjectModuleStatement` always
+  // synthesizes its OWN fresh, independent import/require for the reference
+  // it builds, so this function only needs the module specifier and export
+  // name — whether the user's own import was type-only never matters.
   const checker = options.analysis.checker;
   for (const statement of state.sourceFile.statements) {
     if (
       !typescript.isImportDeclaration(statement) ||
       statement.importClause === undefined ||
-      statement.importClause.isTypeOnly ||
       !typescript.isStringLiteral(statement.moduleSpecifier)
     ) {
       continue;
@@ -1895,9 +1903,6 @@ function findNamedImportOfClass(
       continue;
     }
     for (const element of bindings.elements) {
-      if (element.isTypeOnly) {
-        continue;
-      }
       const local = checker.getSymbolAtLocation(element.name);
       if (local === undefined) {
         continue;

@@ -4,6 +4,12 @@ All notable changes to `@ts-typed/compiler` are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.1.22] - 2026-10-18
+
+### Fixed
+
+- `ValueObject` subclass detection (0.1.21) failed to find a cross-file reference when the class was imported with `import type { CPF } from '...'` (or an individual `import { type CPF } from '...'` specifier) — a VERY common way to import something that's only ever used as a type annotation, which is the entire point of this feature (no `new CPF(...)` anywhere in application code). The detection silently fell back to treating the type as `unknown` (no validation, no auto-construction at all) in this case. The fix removes the `isTypeOnly` exclusion: the synthesized import `createValueObjectDefinitionExpression` adds for the constructor reference is already a completely fresh, independent `require`/namespace import (confirmed in the code, not assumed) — it never depended on the user's own import surviving TypeScript's emit, so there was no reason to skip a type-only import in the first place. Caught end-to-end via a real multi-file build in a consuming application (not just the internal test suite), where `import type` is a common, idiomatic style.
+
 ## [0.1.21] - 2026-10-18
 
 ### Added
