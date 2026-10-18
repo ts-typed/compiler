@@ -4,6 +4,14 @@ All notable changes to `@ts-typed/compiler` are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.1.13] - 2026-10-18
+
+### Added
+
+- `compiler.enforceMutationGuards` now wraps NESTED arrays/`Map`s/`Set`s/plain-objects recursively, not just the top-level value that crosses a typed boundary. Previously, `const config: { items: number[] } = value;` wrapped `config` itself but left `config.items` — a nested array — completely unguarded, so `config.items.push('wrong')` slipped through even with the flag on. Now, when a guard proxy is first created, every declared nested position already present (array items, object properties, Map keys/values, Set items) whose value is itself a container with a matching declared schema gets recursively wrapped too, and the wrapped version is written back in place so later reads see the guarded version. The same recursive wrapping applies when a NEW container value is written into an already-guarded structure (`config.items = [1, 2, 3]` — the newly-assigned array is wrapped before being stored, so it stays protected too). Circular references (an object referencing itself, or two objects referencing each other) are handled via a per-wrap session that reuses the proxy already being built instead of recursing forever.
+
+  **Known limitations, not covered by this release:** a `Set`'s pre-existing items (present before the guard was created) cannot be swapped for their wrapped versions without removing and re-adding them, which would change iteration order — only each item's OWN nested children get wrapped in place; the item itself stays unguarded for direct top-level writes. A `Map`'s keys keep their identity for the same lookup-by-reference reason (only walked, never replaced). A value declared as a union with more than one container member of the same runtime kind (e.g. a schema ambiguous between two different array shapes) is left unwrapped rather than guessing which one applies. Wrapping changes identity: a nested value's wrapped (proxy) version is no longer `===` the raw reference the caller originally held onto, and `Set.has(rawItem)` after `add(rawItem)` reflects the wrapped version, not the raw one passed in.
+
 ## [0.1.12] - 2026-10-18
 
 ### Added

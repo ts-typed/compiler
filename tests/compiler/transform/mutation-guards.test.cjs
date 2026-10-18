@@ -562,3 +562,214 @@ test('protectValue wraps plain objects only when enforceMutationGuards is set, a
   const instance = new Holder();
   assert.strictEqual(guards.protectValue({ kind: 'object', properties: {}, allowExtraProperties: true }, instance, guardedContext), instance);
 });
+
+/**
+ * Nested mutation guards: the Proxy wrapping recurses into arrays, Maps, Sets
+ * and plain objects found inside a guarded value, both when the value first
+ * crosses a typed boundary and when a new value is written into it.
+ */
+test('compiler.enforceMutationGuards guards a nested array inside a typed object: push of a wrong-typed item throws', () => {
+  const stdout = runSnippet(
+    [
+      'const value: any = { items: [1, 2] };',
+      'const config: { items: number[] } = value;',
+      'let caught: any;',
+      'try { config.items.push("wrong" as any); } catch (error) { caught = error; }',
+      'if (caught === undefined) throw new Error("push was accepted");',
+      'if (caught.name !== "StrictTypeError") throw new Error("expected StrictTypeError, got " + caught.name);',
+      'if (config.items.join(",") !== "1,2") throw new Error("push partially applied");',
+      'process.stdout.write("OK");',
+    ].join('\n'),
+    { enforceMutationGuards: true },
+  );
+  assert.equal(stdout, 'OK');
+});
+
+test('compiler.enforceMutationGuards still allows a valid push into a nested array', () => {
+  const stdout = runSnippet(
+    [
+      'const value: any = { items: [1, 2] };',
+      'const config: { items: number[] } = value;',
+      'config.items.push(3);',
+      'if (config.items.length !== 3 || config.items.join(",") !== "1,2,3") throw new Error("valid push failed");',
+      'process.stdout.write("OK");',
+    ].join('\n'),
+    { enforceMutationGuards: true },
+  );
+  assert.equal(stdout, 'OK');
+});
+
+test('compiler.enforceMutationGuards guards a nested object inside an array', () => {
+  const stdout = runSnippet(
+    [
+      'const value: any = [{ value: 1 }];',
+      'const list: { value: number }[] = value;',
+      'let caught: any;',
+      'try { list[0].value = "wrong" as any; } catch (error) { caught = error; }',
+      'if (caught === undefined || caught.name !== "StrictTypeError") throw new Error("write was not rejected");',
+      'if (list[0].value !== 1) throw new Error("value changed");',
+      'process.stdout.write("OK");',
+    ].join('\n'),
+    { enforceMutationGuards: true },
+  );
+  assert.equal(stdout, 'OK');
+});
+
+test('compiler.enforceMutationGuards guards an array nested in an object nested in an array', () => {
+  const stdout = runSnippet(
+    [
+      'const value: any = [{ tags: [1] }];',
+      'const list: { tags: number[] }[] = value;',
+      'let caught: any;',
+      'try { list[0].tags.push("wrong" as any); } catch (error) { caught = error; }',
+      'if (caught === undefined || caught.name !== "StrictTypeError") throw new Error("push was accepted");',
+      'if (list[0].tags.join(",") !== "1") throw new Error("push partially applied");',
+      'process.stdout.write("OK");',
+    ].join('\n'),
+    { enforceMutationGuards: true },
+  );
+  assert.equal(stdout, 'OK');
+});
+
+test('compiler.enforceMutationGuards guards a nested array inside a Map value', () => {
+  const stdout = runSnippet(
+    [
+      'const value: any = new Map([["a", [1, 2]]]);',
+      'const m: Map<string, number[]> = value;',
+      'let caught: any;',
+      'try { m.get("a")!.push("wrong" as any); } catch (error) { caught = error; }',
+      'if (caught === undefined || caught.name !== "StrictTypeError") throw new Error("push was accepted");',
+      'if (m.get("a")!.join(",") !== "1,2") throw new Error("push partially applied");',
+      'process.stdout.write("OK");',
+    ].join('\n'),
+    { enforceMutationGuards: true },
+  );
+  assert.equal(stdout, 'OK');
+});
+
+test('compiler.enforceMutationGuards guards a nested array of a replaced slot, and a value written later', () => {
+  const stdout = runSnippet(
+    [
+      'const value: any = { items: [1] };',
+      'const config: { items: number[] } = value;',
+      'config.items = [1, 2];',
+      'let caught: any;',
+      'try { config.items.push("wrong" as any); } catch (error) { caught = error; }',
+      'if (caught === undefined || caught.name !== "StrictTypeError") throw new Error("replaced slot is unguarded");',
+      'if (config.items.join(",") !== "1,2") throw new Error("push partially applied");',
+      'const bag: any = { entries: new Map() };',
+      'const typed: { entries: Map<string, { nums: number[] }> } = bag;',
+      'typed.entries.set("k", { nums: [1] });',
+      'let mapCaught: any;',
+      'try { typed.entries.get("k")!.nums.push("wrong" as any); } catch (error) { mapCaught = error; }',
+      'if (mapCaught === undefined || mapCaught.name !== "StrictTypeError") throw new Error("Map.set value is unguarded");',
+      'process.stdout.write("OK");',
+    ].join('\n'),
+    { enforceMutationGuards: true },
+  );
+  assert.equal(stdout, 'OK');
+});
+
+test('compiler.enforceMutationGuards guards a nested array of an item added with set.add', () => {
+  const stdout = runSnippet(
+    [
+      'const value: any = new Set();',
+      'const bag: Set<{ items: number[] }> = value;',
+      'bag.add({ items: [1] });',
+      'let caught: any;',
+      'try { [...bag][0].items.push("wrong" as any); } catch (error) { caught = error; }',
+      'if (caught === undefined || caught.name !== "StrictTypeError") throw new Error("added item is unguarded");',
+      'process.stdout.write("OK");',
+    ].join('\n'),
+    { enforceMutationGuards: true },
+  );
+  assert.equal(stdout, 'OK');
+});
+
+test('compiler.enforceMutationGuards guards nested arrays of items already in a Set (set items are walked, not replaced)', () => {
+  const stdout = runSnippet(
+    [
+      'const value: any = new Set([{ items: [1] }]);',
+      'const bag: Set<{ items: number[] }> = value;',
+      'let caught: any;',
+      'try { [...bag][0].items.push("wrong" as any); } catch (error) { caught = error; }',
+      'if (caught === undefined || caught.name !== "StrictTypeError") throw new Error("pre-existing set item is unguarded");',
+      'process.stdout.write("OK");',
+    ].join('\n'),
+    { enforceMutationGuards: true },
+  );
+  assert.equal(stdout, 'OK');
+});
+
+test('compiler.enforceMutationGuards terminates on a self-referencing object and on a parent/child cycle', () => {
+  const stdout = runSnippet(
+    [
+      'interface Loop { name: string; next?: Loop }',
+      'const value: any = { name: "a" };',
+      'value.next = value;',
+      'const loop: Loop = value;',
+      'if (loop.next !== loop) throw new Error("self reference lost");',
+      'interface Holder { name: string; children: Member[] }',
+      'interface Member { parent: Holder; tags: number[] }',
+      'const parentValue: any = { name: "p", children: [] };',
+      'const childValue: any = { parent: parentValue, tags: [1] };',
+      'parentValue.children.push(childValue);',
+      'const holder: Holder = parentValue;',
+      'if (holder.children[0].parent !== holder) throw new Error("parent/child cycle lost");',
+      'let caught: any;',
+      'try { holder.children[0].tags.push("wrong" as any); } catch (error) { caught = error; }',
+      'if (caught === undefined || caught.name !== "StrictTypeError") throw new Error("cyclic child array is unguarded");',
+      'process.stdout.write("OK");',
+    ].join('\n'),
+    { enforceMutationGuards: true },
+  );
+  assert.equal(stdout, 'OK');
+});
+
+test('compiler.enforceMutationGuards defaults off: writes into nested arrays, Maps and Sets still succeed', () => {
+  const body = [
+    'const value: any = { items: [1, 2] };',
+    'const config: { items: number[] } = value;',
+    'config.items.push("wrong" as any);',
+    'if (config.items.length !== 3) throw new Error("push was rejected");',
+    'config.items = [1, 2];',
+    'config.items.push("wrong" as any);',
+    'if (config.items.length !== 3) throw new Error("replaced slot push was rejected");',
+    'const mapValue: any = new Map([["a", [1, 2]]]);',
+    'const m: Map<string, number[]> = mapValue;',
+    'm.get("a")!.push("wrong" as any);',
+    'if (m.get("a")!.length !== 3) throw new Error("map nested push was rejected");',
+    'const setValue: any = new Set();',
+    'const bag: Set<{ items: number[] }> = setValue;',
+    'bag.add({ items: [1] });',
+    '[...bag][0].items.push("wrong" as any);',
+    'if ([...bag][0].items.length !== 2) throw new Error("set nested push was rejected");',
+    'const deep: any = [{ tags: [1] }];',
+    'const list: { tags: number[] }[] = deep;',
+    'list[0].tags.push("wrong" as any);',
+    'if (list[0].tags.length !== 2) throw new Error("deep push was rejected");',
+    'process.stdout.write("OK");',
+  ].join('\n');
+
+  assert.equal(runSnippet(body), 'OK');
+  assert.equal(runSnippet(body, { enforceMutationGuards: false }), 'OK');
+});
+
+test('compiler.enforceMutationGuards guards an optional nested array (declared as a union with undefined)', () => {
+  const stdout = runSnippet(
+    [
+      'const value: any = { items: [1, 2] };',
+      'const config: { items?: number[] } = value;',
+      'let caught: any;',
+      'try { config.items!.push("wrong" as any); } catch (error) { caught = error; }',
+      'if (caught === undefined || caught.name !== "StrictTypeError") throw new Error("optional nested array is unguarded");',
+      'if (config.items!.join(",") !== "1,2") throw new Error("push partially applied");',
+      'const empty: any = {};',
+      'const sparse: { items?: number[] } = empty;',
+      'if (sparse.items !== undefined) throw new Error("absent optional gained a value");',
+      'process.stdout.write("OK");',
+    ].join('\n'),
+    { enforceMutationGuards: true },
+  );
+  assert.equal(stdout, 'OK');
+});

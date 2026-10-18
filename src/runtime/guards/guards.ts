@@ -103,6 +103,7 @@ function guardArrayMutations(
   schema: Schema,
   array: unknown[],
   context: AssertionContext,
+  session: MutationSession = createMutationSession(),
 ): unknown[] {
   if (mutationGuardProxies.has(array)) {
     return array;
@@ -110,6 +111,10 @@ function guardArrayMutations(
   const resolved = resolveReference(schema, context);
   if (resolved.kind !== 'array') {
     return array;
+  }
+  const inProgress = sessionProxy(session, array, resolved);
+  if (inProgress !== undefined) {
+    return inProgress as unknown[];
   }
 
   const entries = mutationGuardEntries.get(array) ?? [];
@@ -134,6 +139,8 @@ function guardArrayMutations(
         };
         assertValue(items, nextValue, itemContext);
         installProtection(items, nextValue, itemContext, createProtectionState());
+        const stored = wrapMutationValue(items, nextValue, itemContext);
+        return Reflect.set(target, property, stored, target);
       }
       return Reflect.set(target, property, nextValue, target);
     },
@@ -145,6 +152,8 @@ function guardArrayMutations(
   entries.push({ schema: resolved, context, proxy });
   mutationGuardEntries.set(array, entries);
   mutationGuardProxies.add(proxy);
+  rememberSessionProxy(session, array, resolved, proxy);
+  wrapNestedArrayItems(array, resolved, context, session);
   return proxy;
 }
 
@@ -183,6 +192,7 @@ function guardMapMutations(
   schema: Schema,
   map: Map<unknown, unknown>,
   context: AssertionContext,
+  session: MutationSession = createMutationSession(),
 ): Map<unknown, unknown> {
   if (mutationGuardProxies.has(map)) {
     return map;
@@ -190,6 +200,10 @@ function guardMapMutations(
   const resolved = resolveReference(schema, context);
   if (resolved.kind !== 'map') {
     return map;
+  }
+  const inProgress = sessionProxy(session, map, resolved);
+  if (inProgress !== undefined) {
+    return inProgress as Map<unknown, unknown>;
   }
   const existing = findCollectionMutationProxy(map, resolved, context);
   if (existing !== undefined) {
@@ -208,7 +222,7 @@ function guardMapMutations(
           const valueContext = mutationEntryContext(context, `${context.propertyPath}<mutate>.value`);
           assertValue(valueSchema, entryValue, valueContext);
           installProtection(valueSchema, entryValue, valueContext, createProtectionState());
-          target.set(key, entryValue);
+          target.set(key, wrapMutationValue(valueSchema, entryValue, valueContext));
           return proxy;
         };
       }
@@ -224,6 +238,8 @@ function guardMapMutations(
   });
 
   rememberCollectionMutationProxy(map, resolved, context, proxy);
+  rememberSessionProxy(session, map, resolved, proxy);
+  wrapNestedMapEntries(map, resolved, context, session);
   return proxy;
 }
 
@@ -235,6 +251,7 @@ function guardSetMutations(
   schema: Schema,
   set: Set<unknown>,
   context: AssertionContext,
+  session: MutationSession = createMutationSession(),
 ): Set<unknown> {
   if (mutationGuardProxies.has(set)) {
     return set;
@@ -242,6 +259,10 @@ function guardSetMutations(
   const resolved = resolveReference(schema, context);
   if (resolved.kind !== 'set') {
     return set;
+  }
+  const inProgress = sessionProxy(session, set, resolved);
+  if (inProgress !== undefined) {
+    return inProgress as Set<unknown>;
   }
   const existing = findCollectionMutationProxy(set, resolved, context);
   if (existing !== undefined) {
@@ -256,7 +277,7 @@ function guardSetMutations(
           const itemContext = mutationEntryContext(context, `${context.propertyPath}<mutate>`);
           assertValue(itemSchema, item, itemContext);
           installProtection(itemSchema, item, itemContext, createProtectionState());
-          target.add(item);
+          target.add(wrapMutationValue(itemSchema, item, itemContext));
           return proxy;
         };
       }
@@ -272,11 +293,214 @@ function guardSetMutations(
   });
 
   rememberCollectionMutationProxy(set, resolved, context, proxy);
+  rememberSessionProxy(session, set, resolved, proxy);
+  wrapNestedSetItems(set, resolved, context, session);
   return proxy;
 }
 
 function mutationEntryContext(context: AssertionContext, propertyPath: string): AssertionContext {
   return { ...context, propertyPath, operation: 'mutate' };
+}
+
+/**
+ * Proxies created during one top-level wrap, keyed by the underlying value and
+ * its resolved schema. A value reached again while its own wrap is still in
+ * progress (a cycle, such as `node.self = node`) returns the proxy already
+ * being built instead of recursing forever. The schema is part of the key so a
+ * value reached at two different declared positions still gets the proxy for
+ * each one. Every trap or nested wrap that needs one starts a fresh session.
+ */
+type MutationSession = Map<object, Map<Schema, object>>;
+
+function createMutationSession(): MutationSession {
+  return new Map();
+}
+
+function sessionProxy(session: MutationSession, value: object, schema: Schema): object | undefined {
+  return session.get(value)?.get(schema);
+}
+
+function rememberSessionProxy(
+  session: MutationSession,
+  value: object,
+  schema: Schema,
+  proxy: object,
+): void {
+  const schemas = session.get(value) ?? new Map<Schema, object>();
+  schemas.set(schema, proxy);
+  session.set(value, schemas);
+}
+
+/**
+ * Wraps `value` with the guard that matches its runtime shape and the declared
+ * `schema`, recursively. A value that is not a reference, is already a guard
+ * proxy, or does not match its schema's kind is returned as is. Used both when
+ * a nested value is found already present (see the `wrapNested*` helpers) and
+ * when a new value is written through a trap.
+ */
+function wrapMutationValue(
+  schema: Schema,
+  value: unknown,
+  context: AssertionContext,
+  session: MutationSession = createMutationSession(),
+): unknown {
+  if (!isReferenceValue(value) || mutationGuardProxies.has(value)) {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    const candidate = selectMutationSchema(schema, 'array', context);
+    return candidate === undefined ? value : guardArrayMutations(candidate, value, context, session);
+  }
+  if (value instanceof Map) {
+    const candidate = selectMutationSchema(schema, 'map', context);
+    return candidate === undefined ? value : guardMapMutations(candidate, value, context, session);
+  }
+  if (value instanceof Set) {
+    const candidate = selectMutationSchema(schema, 'set', context);
+    return candidate === undefined ? value : guardSetMutations(candidate, value, context, session);
+  }
+  if (typeof value === 'object') {
+    const candidate = selectMutationSchema(schema, 'object', context);
+    return candidate === undefined ? value : guardObjectMutations(candidate, value, context, session);
+  }
+  return value;
+}
+
+/**
+ * Finds the schema a runtime value of shape `kind` is checked against. An
+ * optional property is declared as a union with `undefined`, so a union is
+ * searched for its single member of that kind. A union with several members of
+ * that kind is ambiguous and yields `undefined`, which leaves the value
+ * unwrapped rather than guessing.
+ */
+function selectMutationSchema(
+  schema: Schema,
+  kind: 'array' | 'map' | 'set' | 'object',
+  context: AssertionContext,
+): Schema | undefined {
+  const resolved = resolveReference(schema, context);
+  if (resolved.kind === kind) {
+    return resolved;
+  }
+  if (resolved.kind !== 'union') {
+    return undefined;
+  }
+  const matches = resolved.schemas
+    .map((member) => selectMutationSchema(member, kind, context))
+    .filter((member): member is Schema => member !== undefined);
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
+/**
+ * Wraps the array items present when the array's guard is created, writing each
+ * wrapped item back onto the real array so later reads see the guarded version.
+ */
+function wrapNestedArrayItems(
+  array: unknown[],
+  schema: ArraySchema,
+  context: AssertionContext,
+  session: MutationSession,
+): void {
+  for (let index = 0; index < array.length; index += 1) {
+    const descriptor = Object.getOwnPropertyDescriptor(array, String(index));
+    if (descriptor === undefined || isAccessorDescriptor(descriptor)) {
+      continue;
+    }
+    const current = descriptor.value as unknown;
+    const wrapped = wrapMutationValue(schema.items, current, indexedContext(context, index), session);
+    if (wrapped !== current) {
+      Reflect.set(array, String(index), wrapped, array);
+    }
+  }
+}
+
+/**
+ * Wraps the Map entries present when the Map's guard is created. Values are
+ * replaced in place with `target.set`, which keeps the key and its position.
+ * Keys keep their identity (replacing a key would break lookups by the original
+ * reference), so a key that is itself a structure is only walked: its own nested
+ * children are wrapped in place, the key object is not replaced.
+ */
+function wrapNestedMapEntries(
+  map: Map<unknown, unknown>,
+  schema: MapSchema,
+  context: AssertionContext,
+  session: MutationSession,
+): void {
+  let index = 0;
+  for (const [key, entryValue] of [...map]) {
+    const keyContext = { ...context, propertyPath: `${context.propertyPath}<${index}>.key` };
+    wrapMutationValue(schema.key, key, keyContext, session);
+    const valueContext = { ...context, propertyPath: `${context.propertyPath}<${index}>.value` };
+    const wrapped = wrapMutationValue(schema.value, entryValue, valueContext, session);
+    if (wrapped !== entryValue) {
+      map.set(key, wrapped);
+    }
+    index += 1;
+  }
+}
+
+/**
+ * Set items present before the guard existed cannot be replaced without
+ * removing and re-adding them, which would change iteration order, so they are
+ * not swapped for their wrapped versions. Each item is only walked: any nested
+ * array, Map, Set or object inside it is wrapped in place, but the item itself
+ * stays unguarded. Items added later through `add` are wrapped as they are added.
+ */
+function wrapNestedSetItems(
+  set: Set<unknown>,
+  schema: SetSchema,
+  context: AssertionContext,
+  session: MutationSession,
+): void {
+  let index = 0;
+  for (const item of [...set]) {
+    wrapMutationValue(schema.item, item, indexedContext(context, index), session);
+    index += 1;
+  }
+}
+
+/**
+ * Wraps the declared properties present on a plain object when its guard is
+ * created. Reads go through `Reflect.get` because installed guards are
+ * accessors; the write-back goes through {@link storeMutationValue}.
+ */
+function wrapNestedObjectProperties(
+  target: object,
+  properties: SchemaProperties,
+  context: AssertionContext,
+  session: MutationSession,
+): void {
+  for (const key of Reflect.ownKeys(properties)) {
+    if (Object.getOwnPropertyDescriptor(target, key) === undefined) {
+      continue;
+    }
+    const current = Reflect.get(target, key, target) as unknown;
+    const wrapped = wrapMutationValue(
+      properties[key].schema,
+      current,
+      nestedContext(context, key),
+      session,
+    );
+    if (wrapped !== current) {
+      storeMutationValue(target, key, wrapped);
+    }
+  }
+}
+
+/**
+ * Replaces the stored value of an own property with `value` without running
+ * the guard's validation again. The value being stored is a proxy over a value
+ * that already passed validation, and an installed readonly guard would refuse
+ * a setter call, so the installed guard's stored value is updated directly.
+ */
+function storeMutationValue(owner: object, key: PropertyKey, value: unknown): void {
+  const guard = getInstalledGuard(owner, key);
+  if (guard !== undefined) {
+    guard.value = value;
+    return;
+  }
+  Reflect.set(owner, key, value, owner);
 }
 
 function findCollectionMutationProxy(
@@ -326,6 +550,7 @@ function guardObjectMutations(
   schema: Schema,
   object: object,
   context: AssertionContext,
+  session: MutationSession = createMutationSession(),
 ): object {
   if (mutationGuardProxies.has(object)) {
     return object;
@@ -337,6 +562,10 @@ function guardObjectMutations(
   const prototype = Object.getPrototypeOf(object) as object | null;
   if (prototype !== Object.prototype && prototype !== null) {
     return object;
+  }
+  const inProgress = sessionProxy(session, object, resolved);
+  if (inProgress !== undefined) {
+    return inProgress;
   }
   const existing = findCollectionMutationProxy(object, resolved, context);
   if (existing !== undefined) {
@@ -358,6 +587,8 @@ function guardObjectMutations(
         const propertyContext = propertyMutationContext(property);
         assertValue(declared.schema, nextValue, propertyContext);
         installProtection(declared.schema, nextValue, propertyContext, createProtectionState());
+        const stored = wrapMutationValue(declared.schema, nextValue, propertyContext);
+        return Reflect.set(target, property, stored, target);
       }
       return Reflect.set(target, property, nextValue, target);
     },
@@ -376,12 +607,16 @@ function guardObjectMutations(
           return false;
         }
         installProtection(declared.schema, descriptor.value, propertyContext, createProtectionState());
+        const stored = wrapMutationValue(declared.schema, descriptor.value, propertyContext);
+        return Reflect.defineProperty(target, property, { ...descriptor, value: stored });
       }
       return Reflect.defineProperty(target, property, descriptor);
     },
   });
 
   rememberCollectionMutationProxy(object, resolved, context, proxy);
+  rememberSessionProxy(session, object, resolved, proxy);
+  wrapNestedObjectProperties(object, properties, context, session);
   return proxy;
 }
 
