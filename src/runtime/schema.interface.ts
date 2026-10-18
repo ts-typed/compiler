@@ -85,6 +85,15 @@ export interface ObjectSchema {
    * absent one, by {@link strictClassDefault}.
    */
   readonly instanceOf?: Function;
+  /**
+   * A live reference to a `ValueObject` subclass constructor, embedded the
+   * same way `instanceOf` is. When set, this schema does not describe a
+   * plain object's declared properties at all (`properties` is irrelevant
+   * and should be empty) — it means "a raw string crossing this boundary
+   * should be auto-constructed into an instance of this class instead of
+   * validated structurally."
+   */
+  readonly valueObjectCtor?: Function;
   readonly strictClassDefault?: boolean;
 }
 

@@ -255,6 +255,17 @@ function validateObject(
   path: string,
   state: ValidationState,
 ): void {
+  if (schema.valueObjectCtor !== undefined) {
+    // A ValueObject schema never validates structurally: the only accepted
+    // value is an already-constructed instance. Raw strings are turned into
+    // instances at the boundary (see autoConstructValueObject in guards.ts),
+    // so reaching this point with a raw value means no boundary converted it.
+    if (!(value instanceof schema.valueObjectCtor)) {
+      fail(context, path, valueObjectName(schema.valueObjectCtor), value, 'TYPE_MISMATCH');
+    }
+    return;
+  }
+
   if (!isReferenceValue(value) || Array.isArray(value)) {
     fail(context, path, 'object', value, 'TYPE_MISMATCH');
   }
@@ -451,6 +462,10 @@ function shouldEnforceInstanceOf(schema: ObjectSchema): boolean {
 
 function instanceOfName(constructor: Function): string {
   return constructor.name.length > 0 ? constructor.name : 'class instance';
+}
+
+function valueObjectName(constructor: Function): string {
+  return constructor.name.length > 0 ? constructor.name : 'ValueObject';
 }
 
 function isArrayIndex(key: string): boolean {

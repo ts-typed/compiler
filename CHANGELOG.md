@@ -4,6 +4,14 @@ All notable changes to `@ts-typed/compiler` are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.1.20] - 2026-10-18
+
+### Added
+
+- Step 2/3 of auto-constructed value types: when an `ObjectSchema` carries a new `valueObjectCtor` field (a live reference to a `ValueObject` subclass, embedded the same way `instanceOf` already is — set manually for now; a follow-up release teaches the compiler to set it automatically for a real `ValueObject` subclass declared as a boundary's type), a raw string crossing that boundary is now auto-constructed into an instance instead of being validated structurally or rejected outright: `protectValue` (variables, parameters, returns, casts) and a class field's write-time guard both run the value through a new shared `autoConstructValueObject` helper. An existing instance passes through unchanged (no re-validation); a raw string is handed to `new Ctor(raw, context)` — the class's own `isValid()` check runs and throws `StrictTypeError` on failure, with the SAME `propertyPath`/`contractKind`/`operation`/`className` the boundary already carries, so an auto-constructed validation failure reads exactly like any other one; any other value (not a string, not already an instance) is rejected as `TYPE_MISMATCH`.
+
+  **Known limitations, not covered by this release**: a `ValueObject`-typed property NESTED inside a plain object/array that itself crosses a boundary as a whole is not converted — `validateObject`'s property walk has no way to substitute a value in its parent object, so a raw string there now fails loudly (`TYPE_MISMATCH`) instead of silently passing, which is at least safe, but not yet auto-constructed. An intersection of object schemas including a `valueObjectCtor` schema drops it, the same way `instanceOf` already does. This is runtime-only — no compiler change yet; the compiler side (recognizing a `ValueObject` subclass in real TypeScript source and setting `valueObjectCtor` automatically) is a separate, upcoming step.
+
 ## [0.1.19] - 2026-10-18
 
 ### Added

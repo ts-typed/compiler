@@ -14,6 +14,7 @@ import type {
 } from '../schema.interface';
 import type { Schema } from '../schema.type';
 import { StrictTypeError } from '../strict-type-error.class';
+import type { ValueObjectErrorContext } from '../value-object.class';
 import type { FieldGuardOptions } from './field-guard-options.interface';
 
 interface GuardContract {
@@ -71,6 +72,11 @@ export function protectValue(
   };
   const prepared = prepareContract(contract, value, context.operation);
 
+  const valueObjectCtor = valueObjectCtorOf(prepared.schema, prepared.context);
+  if (valueObjectCtor !== undefined) {
+    return autoConstructValueObject(valueObjectCtor, value, prepared.context);
+  }
+
   assertValue(prepared.schema, value, prepared.context);
   installProtection(prepared.schema, value, prepared.context, createProtectionState());
   if (context.enforceMutationGuards === true) {
@@ -88,6 +94,53 @@ export function protectValue(
     }
   }
   return value;
+}
+
+/**
+ * Returns the `ValueObject` constructor when `schema` (after resolving refs)
+ * is an object schema marked with `valueObjectCtor`, otherwise `undefined`.
+ */
+function valueObjectCtorOf(schema: Schema, context: AssertionContext): Function | undefined {
+  const resolved = resolveReference(schema, context);
+  return resolved.kind === 'object' ? resolved.valueObjectCtor : undefined;
+}
+
+/**
+ * Shared auto-construct step for a boundary crossing a `ValueObject` schema.
+ * Used by both {@link protectValue} and the field setter built in
+ * {@link installDataGuard}, so the behavior cannot drift between them.
+ *
+ * - An existing instance of `ctor` is returned unchanged (no re-validation,
+ *   no re-construction).
+ * - A raw string is passed to `new ctor(raw, valueObjectContext)`. The class's
+ *   own constructor runs `isValid` and throws `StrictTypeError` on failure;
+ *   that error is deliberately not caught or rewrapped here.
+ * - Any other value is rejected as a `TYPE_MISMATCH` (via `assertValue`, so the
+ *   error has the same shape as every other mismatch).
+ *
+ * The returned value is what the caller must store or hand out in place of the
+ * original raw value.
+ */
+export function autoConstructValueObject(
+  ctor: Function,
+  value: unknown,
+  context: AssertionContext,
+): unknown {
+  if (value instanceof ctor) {
+    return value;
+  }
+  if (typeof value !== 'string') {
+    assertValue({ kind: 'object', properties: {}, valueObjectCtor: ctor }, value, context);
+  }
+
+  const valueObjectContext: ValueObjectErrorContext = {
+    propertyPath: context.propertyPath,
+    contractKind: context.contractKind,
+    operation: context.operation,
+    ...(context.className === undefined ? {} : { className: context.className }),
+  };
+  const Constructor = ctor as new (raw: string, context?: ValueObjectErrorContext) => object;
+  return new Constructor(value as string, valueObjectContext);
 }
 
 /**
@@ -692,15 +745,22 @@ export function installFieldGuard(
   // than that `undefined` placeholder) is the only case worth treating as
   // already initialized here.
   const isInitialized = options.initialized || (descriptor !== undefined && currentValue !== undefined);
+  // A ValueObject-typed field that already holds a raw string is converted
+  // into its instance before the guard takes over, matching the setter path.
+  const valueObjectCtor = valueObjectCtorOf(schema, fieldContext);
+  const initialValue =
+    isInitialized && valueObjectCtor !== undefined
+      ? autoConstructValueObject(valueObjectCtor, currentValue, { ...fieldContext, operation: context.operation })
+      : currentValue;
   if (isInitialized) {
-    validateContract(contract, currentValue, context.operation);
-    installContractProtection(contract, currentValue, context.operation);
+    validateContract(contract, initialValue, context.operation);
+    installContractProtection(contract, initialValue, context.operation);
   }
 
   installDataGuard(
     instance,
     key,
-    currentValue,
+    initialValue,
     isInitialized,
     descriptor,
     contract,
@@ -1334,11 +1394,29 @@ function setGuardedValue(state: DataPropertyGuardState, value: unknown): void {
     prepareContract(contract, value, 'set'),
   );
 
+  // A ValueObject-typed field stores the constructed instance, not the raw
+  // value that was written. The first such contract decides the constructor.
+  let stored: unknown = value;
   for (const prepared of preparedContracts) {
+    const valueObjectCtor = valueObjectCtorOf(prepared.schema, prepared.context);
+    if (valueObjectCtor !== undefined) {
+      stored = autoConstructValueObject(valueObjectCtor, value, prepared.context);
+      break;
+    }
+  }
+
+  for (const prepared of preparedContracts) {
+    if (valueObjectCtorOf(prepared.schema, prepared.context) !== undefined) {
+      assertValue(prepared.schema, stored, prepared.context);
+      continue;
+    }
     assertValue(prepared.schema, value, prepared.context);
   }
 
   for (const prepared of preparedContracts) {
+    if (valueObjectCtorOf(prepared.schema, prepared.context) !== undefined) {
+      continue;
+    }
     installProtection(
       prepared.schema,
       value,
@@ -1347,7 +1425,7 @@ function setGuardedValue(state: DataPropertyGuardState, value: unknown): void {
     );
   }
 
-  state.value = value;
+  state.value = stored;
   state.isInitialized = true;
 }
 
