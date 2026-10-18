@@ -4,6 +4,12 @@ All notable changes to `@ts-typed/compiler` are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.1.18] - 2026-10-18
+
+### Documentation
+
+- Full `README.md` rewrite: configuration reference (every `compiler.*`/top-level flag), every decorator (`AllowExtraProperties`, `StrictClass`/`StructuralClass`, `ServerPopulated`, `TypeErrorResponse`), the `StrictTypeError` shape, the explicit-generics feature, and a clear, grouped list of known limitations. No code changes.
+
 ## [0.1.17] - 2026-10-18
 
 ### Added
