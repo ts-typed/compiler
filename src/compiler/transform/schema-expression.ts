@@ -59,6 +59,15 @@ export function createSchemaExpression(
         );
       }
       break;
+    case 'map':
+      properties.push(
+        factory.createPropertyAssignment('key', createSchemaExpression(typescript, factory, schema.key)),
+        factory.createPropertyAssignment('value', createSchemaExpression(typescript, factory, schema.value)),
+      );
+      break;
+    case 'set':
+      properties.push(factory.createPropertyAssignment('item', createSchemaExpression(typescript, factory, schema.item)));
+      break;
     case 'object': {
       const schemaProperties: ts.ObjectLiteralElementLike[] = [];
       for (const key of Reflect.ownKeys(schema.properties)) {

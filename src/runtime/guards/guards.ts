@@ -3,9 +3,11 @@ import { assertValue } from '../assert-value';
 import type { AssertionContext } from '../assertion-context.interface';
 import type {
   ArraySchema,
+  MapSchema,
   ObjectPropertySchema,
   ObjectSchema,
   SchemaProperties,
+  SetSchema,
   TupleSchema,
 } from '../schema.interface';
 import type { Schema } from '../schema.type';
@@ -385,6 +387,16 @@ function installProtection(
         installTupleItemProtection(schema, value, context, state);
       }
       return;
+    case 'map':
+      if (value instanceof Map) {
+        installMapEntryProtection(schema, value, context, state);
+      }
+      return;
+    case 'set':
+      if (value instanceof Set) {
+        installSetItemProtection(schema, value, context, state);
+      }
+      return;
     case 'intersection':
       for (const candidate of schema.schemas) {
         installProtection(candidate, value, context, state);
@@ -562,6 +574,41 @@ function installTupleItemProtection(
       indexedContext(context, index),
       state,
     );
+  }
+}
+
+/**
+ * Protects the keys and values present when the contract is installed.
+ * Entries added later through `.set()` are not intercepted (known limitation).
+ */
+function installMapEntryProtection(
+  schema: MapSchema,
+  value: Map<unknown, unknown>,
+  context: AssertionContext,
+  state: ProtectionState,
+): void {
+  let index = 0;
+  for (const [key, entryValue] of value) {
+    installProtection(schema.key, key, { ...context, propertyPath: `${context.propertyPath}<${index}>.key` }, state);
+    installProtection(schema.value, entryValue, { ...context, propertyPath: `${context.propertyPath}<${index}>.value` }, state);
+    index += 1;
+  }
+}
+
+/**
+ * Protects the items present when the contract is installed. Items added later
+ * through `.add()` are not intercepted (known limitation).
+ */
+function installSetItemProtection(
+  schema: SetSchema,
+  value: Set<unknown>,
+  context: AssertionContext,
+  state: ProtectionState,
+): void {
+  let index = 0;
+  for (const item of value) {
+    installProtection(schema.item, item, indexedContext(context, index), state);
+    index += 1;
   }
 }
 

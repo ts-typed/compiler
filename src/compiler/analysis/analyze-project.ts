@@ -356,13 +356,19 @@ function getUnsupportedMemberReason(
   const isOnlyPrivate = typescript.isPropertyDeclaration(node)
     && (modifierFlags & typescript.ModifierFlags.Private) !== 0
     && (modifierFlags & (typescript.ModifierFlags.Protected | typescript.ModifierFlags.Static)) === 0;
+  // A plain `static` field (no private/protected) is guarded through a
+  // `static { ... }` initializer block, where `this` is the class itself.
+  const isOnlyStatic = typescript.isPropertyDeclaration(node)
+    && (modifierFlags & typescript.ModifierFlags.Static) !== 0
+    && (modifierFlags & (typescript.ModifierFlags.Private | typescript.ModifierFlags.Protected)) === 0;
   if (
     (modifierFlags &
       (typescript.ModifierFlags.Private |
         typescript.ModifierFlags.Protected |
         typescript.ModifierFlags.Static)) !==
     0 &&
-    !(enforcePrivate && isOnlyPrivate)
+    !(enforcePrivate && isOnlyPrivate) &&
+    !isOnlyStatic
   ) {
     return 'Private, protected, and static members require class-specific instrumentation.';
   }

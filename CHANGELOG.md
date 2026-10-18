@@ -4,6 +4,19 @@ All notable changes to `@ts-typed/compiler` are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.1.2] - 2026-10-17
+
+A continuation of the same real-app fix/test/document loop that produced 0.1.1: closes three more coverage gaps (`static` fields, `Map`/`Set` adapters), and fixes a severe regression that 0.1.1 itself introduced.
+
+### Fixed
+
+- **Regression in 0.1.1, now fixed**: fixing `installFieldGuard`'s silent give-up (0.1.1) exposed a pre-existing bug in how `compiler.enforceReadonly` decides whether to lock a field. A class with no user constructor installs and locks a readonly field in the SAME synthesized constructor, which completes immediately on `new X()` — correct for a bare field (TypeScript's own `strictPropertyInitialization` guarantees it already has a real value by then), but wrong for a field declared with `?` or `!`: both mean the field may legitimately still be unset, or is only "promised" to be set later, when construction completes. The single most common real-world shape hit by this was NestJS's own `ValidationPipe`: `new Dto()` then `instance.field = value` for every field, assigned by `class-transformer` entirely outside any constructor. 0.1.1 as published locked every such field immediately, making every DTO shaped this way (`readonly name!: string` or `readonly role?: UserRole`) reject the framework's own deserialization step with `READONLY_PROPERTY`, regardless of whether the value being assigned was valid. A readonly field is now only locked when it has neither `?` nor `!`.
+
+### Added
+
+- `static` class fields (public, not combined with `private`/`protected`) are now instrumented: a static field's guard is installed in a `static { ... }` initializer block, where `this` is the class itself, reusing the exact same install/lock machinery already used for instance fields. `delete`/`Object.defineProperty` bypass and `compiler.enforceReadonly` locking both work the same way they do for instance fields.
+- `Map<K, V>`, `ReadonlyMap<K, V>`, `Set<T>` and `ReadonlySet<T>` are now first-class schema kinds: their entries/items are validated against the declared key/value/item types when the collection crosses a typed boundary. `WeakMap`/`WeakSet` remain out of scope, and mutating an already-validated collection afterward via `.set()`/`.add()` is not intercepted (the same category of limitation as array mutation) — only the state at the moment of crossing a boundary is checked.
+
 ## [0.1.1] - 2026-10-17
 
 A real NestJS + TypeORM project was upgraded to 0.1.0 and its full test suite rerun, surfacing two bugs in the coverage this release had just added.

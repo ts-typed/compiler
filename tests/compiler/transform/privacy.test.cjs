@@ -113,6 +113,88 @@ test('compiler.enforceReadonly locks a readonly field after its declaring constr
   assert.equal(result.stdout, 'OK');
 });
 
+test('compiler.enforceReadonly does NOT lock a readonly field declared with `!` (definite assignment assertion) and no constructor, so it stays assignable from outside — e.g. class-transformer\'s plainToInstance(Dto, body) pattern (new Dto() then instance.field = value)', () => {
+  // Regression: fixing installFieldGuard's silent give-up for a decorated/
+  // uninitialized field (B-fix in 0.1.1) exposed this pre-existing bug. A
+  // class with NO user constructor gets install+lock in the SAME
+  // synthesized constructor, which completes immediately on `new Dto()` —
+  // so a readonly field without `!` is correctly locked right away. But a
+  // field declared with `!` is the author's explicit statement that
+  // something OUTSIDE the constructor assigns it later (that is the entire
+  // point of `!`) — the single most common case being NestJS's own
+  // ValidationPipe, which does `new Dto()` then assigns each property from
+  // the request body via class-transformer, entirely outside any
+  // constructor. Locking such a field immediately broke every DTO shaped
+  // this way, type-check or not.
+  const project = emitProject(
+    {
+      'main.ts': [
+        "import { StrictTypeError } from 'ts-typed';",
+        'function expectTypeError(action: () => void): void {',
+        '  try { action(); } catch (error) { if (error instanceof StrictTypeError) return; throw error; }',
+        '  throw new Error("missing StrictTypeError");',
+        '}',
+        'class Dto {',
+        '  readonly name!: string;',
+        '}',
+        'const dto = new Dto();',
+        '// class-transformer-style external assignment, after construction, with no constructor involved.',
+        '// Cast through `any` only because TS itself statically forbids assigning a readonly field',
+        '// from outside the class by name; class-transformer does this via reflection, which TS cannot',
+        '// see at all — the cast here has no effect on ts-typed, which guards the property through a',
+        '// real runtime setter, not by rewriting this specific assignment statement.',
+        '(dto as any).name = "Ada";',
+        'if ((dto as any).name !== "Ada") throw new Error("external assignment was rejected: " + dto.name);',
+        '(dto as any).name = "Grace";',
+        'if ((dto as any).name !== "Grace") throw new Error("second external assignment was rejected: " + dto.name);',
+        '// the field is still TYPE-checked: a wrong type must still throw, class-validator decorators or not',
+        'expectTypeError(() => { (dto as any).name = 123; });',
+        'if ((dto as any).name !== "Grace") throw new Error("invalid write changed the value");',
+        'process.stdout.write("OK");',
+      ].join('\n'),
+    },
+    { enforceReadonly: true },
+  );
+
+  assert.equal(project.emitSkipped, false);
+  const result = runEntry(project);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, 'OK');
+});
+
+test('compiler.enforceReadonly does NOT lock a readonly OPTIONAL field (`?`, no initializer, no constructor) either, for the same reason as `!` — e.g. CreateUserDto.role in a real NestJS app', () => {
+  // Same regression, different trigger: `role?: UserRole` (optional, no `!`,
+  // no inline initializer, no constructor) hit the exact same premature
+  // lock, because the original `!`-only exclusion did not also exclude `?`.
+  const project = emitProject(
+    {
+      'main.ts': [
+        "import { StrictTypeError } from 'ts-typed';",
+        'function expectTypeError(action: () => void): void {',
+        '  try { action(); } catch (error) { if (error instanceof StrictTypeError) return; throw error; }',
+        '  throw new Error("missing StrictTypeError");',
+        '}',
+        'class Dto {',
+        '  readonly role?: string;',
+        '}',
+        'const dto = new Dto();',
+        'if ((dto as any).role !== undefined) throw new Error("unexpected initial value: " + dto.role);',
+        '(dto as any).role = "member";',
+        'if ((dto as any).role !== "member") throw new Error("external assignment was rejected: " + dto.role);',
+        'expectTypeError(() => { (dto as any).role = 123; });',
+        'if ((dto as any).role !== "member") throw new Error("invalid write changed the value");',
+        'process.stdout.write("OK");',
+      ].join('\n'),
+    },
+    { enforceReadonly: true },
+  );
+
+  assert.equal(project.emitSkipped, false);
+  const result = runEntry(project);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, 'OK');
+});
+
 test('compiler.enforceReadonly tolerates an early return in the constructor, still locking the field', () => {
   const project = emitProject(
     {

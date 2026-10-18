@@ -4,9 +4,11 @@ import { getClassValidationMode } from './strict-class.decorator';
 import type {
   ArraySchema,
   IntersectionSchema,
+  MapSchema,
   ObjectPropertySchema,
   ObjectSchema,
   RefSchema,
+  SetSchema,
   TupleSchema,
   UnionSchema,
 } from './schema.interface';
@@ -93,6 +95,12 @@ function validate(
       return;
     case 'tuple':
       validateTuple(schema, value, context, path, state);
+      return;
+    case 'map':
+      validateMap(schema, value, context, path, state);
+      return;
+    case 'set':
+      validateSet(schema, value, context, path, state);
       return;
     case 'object':
       validateObject(schema, value, context, path, state);
@@ -197,6 +205,47 @@ function validateTuple(
   }
 
   validateArrayOwnProperties(value, context, path);
+}
+
+/**
+ * Map entries are addressed by their iteration index: `<path><i>.key` and
+ * `<path><i>.value`. Array-style `[i]` is reserved for arrays and sets.
+ */
+function validateMap(
+  schema: MapSchema,
+  value: unknown,
+  context: AssertionContext,
+  path: string,
+  state: ValidationState,
+): void {
+  if (!(value instanceof Map)) {
+    fail(context, path, 'Map', value, 'TYPE_MISMATCH');
+  }
+
+  let index = 0;
+  for (const [key, entryValue] of value) {
+    validate(schema.key, key, context, `${path}<${index}>.key`, state);
+    validate(schema.value, entryValue, context, `${path}<${index}>.value`, state);
+    index += 1;
+  }
+}
+
+function validateSet(
+  schema: SetSchema,
+  value: unknown,
+  context: AssertionContext,
+  path: string,
+  state: ValidationState,
+): void {
+  if (!(value instanceof Set)) {
+    fail(context, path, 'Set', value, 'TYPE_MISMATCH');
+  }
+
+  let index = 0;
+  for (const item of value) {
+    validate(schema.item, item, context, `${path}[${index}]`, state);
+    index += 1;
+  }
 }
 
 function validateObject(

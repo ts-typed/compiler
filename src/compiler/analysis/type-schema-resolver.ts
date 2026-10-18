@@ -6,6 +6,9 @@ import type { SchemaResolution } from './schema-resolution.interface';
 const ALIAS_LIMIT_REASON =
   'The value is validated at the typed boundary, but mutations through external aliases can escape.';
 
+const MAP_NAMES: ReadonlySet<string> = new Set(['Map', 'ReadonlyMap']);
+const SET_NAMES: ReadonlySet<string> = new Set(['Set', 'ReadonlySet']);
+
 function escapeRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
@@ -91,6 +94,19 @@ export class TypeSchemaResolver {
     if (this._checker.isArrayType(type)) {
       return this._resolveDefinitionOrCompound(type, node, canCreateDefinition, () =>
         this._resolveArray(type, node),
+      );
+    }
+    // Map/Set carry TypeFlags.Object like any interface, so they must be
+    // detected here, before the generic structural branch below.
+    const collectionKind = this._getGlobalCollectionKind(type);
+    if (collectionKind === 'map') {
+      return this._resolveDefinitionOrCompound(type, node, canCreateDefinition, () =>
+        this._resolveMap(type, node),
+      );
+    }
+    if (collectionKind === 'set') {
+      return this._resolveDefinitionOrCompound(type, node, canCreateDefinition, () =>
+        this._resolveSet(type, node),
       );
     }
     if ((type.flags & this._typescript.TypeFlags.Object) !== 0) {
@@ -314,6 +330,28 @@ export class TypeSchemaResolver {
     );
   }
 
+  /**
+   * Same heuristic as {@link _isGlobalDate}: the built-in collection interfaces
+   * live in TypeScript lib files (`hasNoDefaultLib === true`), so a user type
+   * that merely shares a name is not matched. `WeakMap`/`WeakSet` are
+   * deliberately out of scope and stay unsupported.
+   */
+  private _getGlobalCollectionKind(type: ts.Type): 'map' | 'set' | undefined {
+    const symbol = type.getSymbol();
+    if (symbol === undefined) {
+      return undefined;
+    }
+    const name = symbol.getName();
+    const kind = MAP_NAMES.has(name) ? 'map' : SET_NAMES.has(name) ? 'set' : undefined;
+    if (kind === undefined) {
+      return undefined;
+    }
+    const isLibDeclaration = (symbol.getDeclarations() ?? []).some(
+      (declaration) => declaration.getSourceFile().hasNoDefaultLib,
+    );
+    return isLibDeclaration ? kind : undefined;
+  }
+
   private _resolveDefinitionOrCompound(
     type: ts.Type,
     node: ts.Node,
@@ -445,6 +483,51 @@ export class TypeSchemaResolver {
     return {
       status: 'partial',
       schema: { kind: 'array', items: itemResolution.schema },
+      reason: ALIAS_LIMIT_REASON,
+    };
+  }
+
+  /**
+   * `Map<K, V>` and `ReadonlyMap<K, V>`: both key and value are resolved and
+   * validated per entry. Mutations through `.set()` after validation are not
+   * intercepted (see guards.ts).
+   */
+  private _resolveMap(type: ts.Type, node: ts.Node): CompoundResolution {
+    const [keyType, valueType] = this._checker.getTypeArguments(type as ts.TypeReference);
+    if (keyType === undefined || valueType === undefined) {
+      return this._unsupported('Map key and value types could not be determined.');
+    }
+    const keyResolution = this._resolveType(keyType, node, true);
+    if (keyResolution.schema === undefined) {
+      return this._unsupported(`Map key is unsupported: ${keyResolution.reason ?? 'unknown type limit'}`);
+    }
+    const valueResolution = this._resolveType(valueType, node, true);
+    if (valueResolution.schema === undefined) {
+      return this._unsupported(`Map value is unsupported: ${valueResolution.reason ?? 'unknown type limit'}`);
+    }
+    return {
+      status: 'partial',
+      schema: { kind: 'map', key: keyResolution.schema, value: valueResolution.schema },
+      reason: ALIAS_LIMIT_REASON,
+    };
+  }
+
+  /**
+   * `Set<T>` and `ReadonlySet<T>`: each item is resolved and validated.
+   * Mutations through `.add()` after validation are not intercepted.
+   */
+  private _resolveSet(type: ts.Type, node: ts.Node): CompoundResolution {
+    const [itemType] = this._checker.getTypeArguments(type as ts.TypeReference);
+    if (itemType === undefined) {
+      return this._unsupported('Set item type could not be determined.');
+    }
+    const itemResolution = this._resolveType(itemType, node, true);
+    if (itemResolution.schema === undefined) {
+      return this._unsupported(`Set item is unsupported: ${itemResolution.reason ?? 'unknown type limit'}`);
+    }
+    return {
+      status: 'partial',
+      schema: { kind: 'set', item: itemResolution.schema },
       reason: ALIAS_LIMIT_REASON,
     };
   }

@@ -4,8 +4,10 @@ import type {
   FunctionSchema,
   IntersectionSchema,
   LiteralSchema,
+  MapSchema,
   NeverSchema,
   ObjectSchema,
+  SetSchema,
   PrimitiveSchema,
   RefSchema,
   TemplateLiteralSchema,
@@ -32,6 +34,8 @@ export type Schema =
   | IntersectionSchema
   | ArraySchema
   | TupleSchema
+  | MapSchema
+  | SetSchema
   | ObjectSchema
   | RefSchema
   | DateSchema

@@ -148,7 +148,13 @@ test('reports open, partial and unsupported coverage without treating unsupporte
   assert.deepEqual(callable.resolution, { status: 'protected', schema: { kind: 'function' } });
   assert.equal(result.diagnostics.some((diagnostic) => diagnostic.name === 'callable'), false);
 
-  for (const name of ['promised', 'mapped', 'optionalTuple']) {
+  // A Map is a protected collection (map schema, alias-limited partial), not unsupported.
+  const mapped = findContract(result, 'mapped', 'variable');
+  assert.equal(mapped.resolution.status, 'partial');
+  assert.equal(mapped.resolution.schema.kind, 'ref');
+  assert.equal(result.diagnostics.some((diagnostic) => diagnostic.name === 'mapped' && diagnostic.status === 'unsupported'), false);
+
+  for (const name of ['promised', 'optionalTuple']) {
     const contract = findContract(result, name, 'variable');
     assert.ok(contract, name);
     assert.equal(contract.resolution.status, 'unsupported', name);
@@ -262,7 +268,6 @@ test('marks unresolved generics and class-specific member syntax unsupported wit
     ['identity', 'return'],
     ['hidden', 'property'],
     ['guarded', 'property'],
-    ['shared', 'property'],
     ['#secret', 'property'],
     ['instance', 'variable'],
     ['discard', 'return'],
@@ -280,6 +285,13 @@ test('marks unresolved generics and class-specific member syntax unsupported wit
     assert.equal(diagnostic.line > 0, true);
     assert.equal(diagnostic.column > 0, true);
   }
+  // A plain `static` field (no private/protected) is now a supported
+  // contract, guarded through a static initializer block.
+  const shared = findContract(result, 'shared', 'property');
+  assert.ok(shared, 'property:shared');
+  assert.notEqual(shared.resolution.status, 'unsupported', 'property:shared');
+  assert.notEqual(shared.resolution.schema, undefined, 'property:shared');
+  assert.equal(result.diagnostics.some((diagnostic) => diagnostic.name === 'shared'), false);
   assert.equal(
     result.diagnostics.find((diagnostic) => diagnostic.name === 'hidden').code,
     'TT_UNSUPPORTED_SYNTAX',

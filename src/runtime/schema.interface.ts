@@ -31,6 +31,17 @@ export interface TupleSchema {
   readonly rest?: Schema | false;
 }
 
+export interface MapSchema {
+  readonly kind: 'map';
+  readonly key: Schema;
+  readonly value: Schema;
+}
+
+export interface SetSchema {
+  readonly kind: 'set';
+  readonly item: Schema;
+}
+
 export interface ObjectPropertySchema {
   readonly schema: Schema;
   readonly optional?: boolean;

@@ -687,6 +687,10 @@ function visitClassMembers(
   context: ts.TransformationContext,
 ): readonly ts.ClassElement[] {
   const guards: FieldGuard[] = [];
+  // Static fields belong to the class, not to an instance, so their guards are
+  // installed in a `static { ... }` block (where `this` is the class) instead of
+  // the constructor.
+  const staticGuards: FieldGuard[] = [];
   const visitedMembers: ts.ClassElement[] = [];
   const privateInitStatements: ts.Statement[] = [];
   const privateLockStatements: ts.Statement[] = [];
@@ -723,7 +727,7 @@ function visitClassMembers(
       const transformed = visitPropertyDeclaration(
         member,
         descriptor,
-        guards,
+        hasModifier(typescript, member, typescript.SyntaxKind.StaticKeyword) ? staticGuards : guards,
         state,
         factory,
         typescript,
@@ -742,6 +746,11 @@ function visitClassMembers(
       continue;
     }
     visitedMembers.push((typescript.visitNode(member, visitor, isClassElement) ?? member) as ts.ClassElement);
+  }
+
+  const staticGuardBlock = createStaticFieldGuardBlock(staticGuards, state, factory);
+  if (staticGuardBlock !== undefined) {
+    visitedMembers.push(staticGuardBlock);
   }
 
   if (guards.length === 0 && privateInitStatements.length === 0 && privateLockStatements.length === 0) {
@@ -810,6 +819,30 @@ function createRequiredFieldFinalizeStatements(
       factory.createBlock(lockCalls, true),
     ),
   ];
+}
+
+/**
+ * Builds a `static { ... }` block that installs guards for the class's own
+ * `static` fields. Inside a static block `this` is the class constructor, so
+ * the same install/lock calls used for instance fields apply unchanged. The
+ * required-field lock is applied unconditionally: static blocks run exactly
+ * once, when the class is defined, so there is no subclass construction that
+ * could need the deferred `new.target` check used for instance fields.
+ */
+function createStaticFieldGuardBlock(
+  guards: readonly FieldGuard[],
+  state: FileTransformState,
+  factory: ts.NodeFactory,
+): ts.ClassStaticBlockDeclaration | undefined {
+  if (guards.length === 0) {
+    return undefined;
+  }
+  const statements: ts.Statement[] = [
+    ...guards.map((guard) => createInstallFieldGuard(factory, state, guard)),
+    ...guards.filter((guard) => guard.readonlyField).map((guard) => createLockReadonlyFieldCall(factory, state, guard)),
+    ...guards.filter((guard) => guard.requiredField).map((guard) => createLockRequiredFieldCall(factory, state, guard)),
+  ];
+  return factory.createClassStaticBlockDeclaration(factory.createBlock(statements, true));
 }
 
 interface ConvertedPrivateField {
@@ -1019,7 +1052,25 @@ function visitPropertyDeclaration(
     key,
     initialized: initializer !== undefined,
     schema: descriptor.resolution.schema,
-    readonlyField: enforceReadonly && hasModifier(typescript, node, typescript.SyntaxKind.ReadonlyKeyword),
+    // Only a BARE field (no `?`, no `!`) is safe to lock as readonly right
+    // after construction. TypeScript's own `strictPropertyInitialization`
+    // already guarantees a bare field has a real value by the time any
+    // constructor (synthesized or user-written) finishes — either an
+    // inline initializer or a genuine constructor-body assignment, both of
+    // which run before the lock. `?` and `!` both mean the opposite: the
+    // field may legitimately still be unset (or only "promised" to be set
+    // later) when construction completes, because the author is relying on
+    // something OUTSIDE the constructor to assign it — the exact pattern
+    // NestJS's `plainToInstance`/class-transformer relies on for a DTO
+    // with no constructor: `new Dto()`, then `instance.field = value` from
+    // the outside, for every field, required or optional. Locking either
+    // kind at "end of construction" — which is effectively "immediately"
+    // for a class with no user constructor body — would make that
+    // external assignment throw READONLY_PROPERTY before it ever runs.
+    readonlyField: enforceReadonly
+      && hasModifier(typescript, node, typescript.SyntaxKind.ReadonlyKeyword)
+      && node.questionToken === undefined
+      && node.exclamationToken === undefined,
     // Only a bare field (no `?` and no `!`) is required: `!` is a definite
     // assignment assertion and the field is tolerated as absent until assigned.
     requiredField: node.questionToken === undefined && node.exclamationToken === undefined,
@@ -1837,8 +1888,12 @@ function getUnsupportedFieldReason(
   node: ts.PropertyDeclaration,
   enforceReadonly: boolean,
 ): string | undefined {
-  if (hasModifier(typescript, node, typescript.SyntaxKind.StaticKeyword)) {
-    return 'Static fields do not have an instance guard installation point.';
+  if (
+    hasModifier(typescript, node, typescript.SyntaxKind.StaticKeyword) &&
+    (hasModifier(typescript, node, typescript.SyntaxKind.PrivateKeyword) ||
+      hasModifier(typescript, node, typescript.SyntaxKind.ProtectedKeyword))
+  ) {
+    return 'Static private and protected fields require class-specific instrumentation.';
   }
   if (typescript.isPrivateIdentifier(node.name)) {
     return '#private fields cannot be replaced with public property descriptors.';
