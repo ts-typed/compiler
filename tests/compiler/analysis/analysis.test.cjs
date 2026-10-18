@@ -141,7 +141,14 @@ test('reports open, partial and unsupported coverage without treating unsupporte
   });
   assert.equal(result.diagnostics.some((diagnostic) => diagnostic.name === 'intentional'), false);
 
-  for (const name of ['callable', 'promised', 'mapped', 'optionalTuple']) {
+  // callable is a pure function type: it is now a protected `function` leaf
+  // (see type-schema-resolver.ts's _isPureFunction), not unsupported.
+  const callable = findContract(result, 'callable', 'variable');
+  assert.ok(callable);
+  assert.deepEqual(callable.resolution, { status: 'protected', schema: { kind: 'function' } });
+  assert.equal(result.diagnostics.some((diagnostic) => diagnostic.name === 'callable'), false);
+
+  for (const name of ['promised', 'mapped', 'optionalTuple']) {
     const contract = findContract(result, name, 'variable');
     assert.ok(contract, name);
     assert.equal(contract.resolution.status, 'unsupported', name);

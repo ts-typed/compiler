@@ -4,6 +4,15 @@ All notable changes to `@ts-typed/compiler` are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.1.1] - 2026-10-17
+
+A real NestJS + TypeORM project was upgraded to 0.1.0 and its full test suite rerun, surfacing two bugs in the coverage this release had just added.
+
+### Fixed
+
+- `installFieldGuard` silently gave up — installing no guard at all — for any field that keeps its `PropertyDeclaration` in the output (every decorated field, to preserve decorator emission) and has no inline initializer: native class fields (target ES2022+) pre-define such a field as `undefined` before the constructor body runs, and that pre-defined, still-uninitialized placeholder was mistaken for "something else already initialized this field, leave it alone." In practice this left every field of a typical `class CreateUserDto { @IsString() name: string; constructor(data) { this.name = data.name; } }` — the common pattern of assigning fields inside the constructor body rather than inline — completely unguarded, decorated or not.
+- A class field whose own type is a pure function (e.g. `class WithHandler { onClick: () => void = () => {}; }`) never had a guard installed at all: the `function` leaf added in 0.1.0 was only wired into the path used when a property is resolved as part of its *containing object's* structural shape, not into the general resolution path a field's own top-level contract candidate goes through to build its `installFieldGuard` call. A property/interface member with a callback type (fixed in 0.1.0) was unaffected; only a *class field's own* candidate took the unpatched path.
+
 ## [0.1.0] - 2026-10-17
 
 A pass over real NestJS + TypeORM + SQLite usage found that the single highest-impact gap was coverage, not any individual bug: class methods, constructors and decorated fields were never instrumented at all, and several common type shapes (`Date`, callback-typed properties) made their whole containing contract silently `unsupported`. This release closes those gaps and fixes twelve runtime-breaking or silently-incorrect bugs found along the way.

@@ -53,6 +53,20 @@ export class TypeSchemaResolver {
     if (directResolution !== undefined) {
       return directResolution;
     }
+    // A pure function type is an opaque leaf (see _isPureFunction) regardless
+    // of WHERE it is being resolved from. _resolvePropertyType special-cases
+    // this for a property being resolved as part of its containing object's
+    // structural shape, but a function-typed value can also be its own
+    // top-level contract — a class field's own candidate, a variable, a
+    // parameter, a return — which reaches this general path directly, not
+    // through _resolvePropertyType. Handling it here, before the Union
+    // branch below, also means a union member that is a pure function (e.g.
+    // `(() => void) | undefined`) gets the same leaf treatment through the
+    // ordinary recursive _resolveComposite call, with no separate union
+    // handling needed on this path.
+    if (this._isPureFunction(type)) {
+      return { status: 'protected', schema: { kind: 'function' } };
+    }
 
     if (type.isUnion()) {
       return this._resolveDefinitionOrCompound(type, node, canCreateDefinition, () =>

@@ -187,6 +187,26 @@ test('a contract with a callback field is protected with no callable-contract wa
   assert.equal(project.diagnostics.length, 0, JSON.stringify(project.diagnostics));
 });
 
+test('a class field whose own type is a pure function is guarded (not just its interface/object-literal counterpart)', () => {
+  // Regression: the `function` leaf was only applied when a property was
+  // resolved AS PART OF its containing object's structural shape
+  // (_resolvePropertyType, used by _resolveObject's member loop). A class
+  // field's OWN top-level contract candidate — the one installFieldGuard
+  // is built from — went through the general _resolveType/_resolveDirectType
+  // path instead, which didn't know about the function leaf and resolved it
+  // as fully unsupported, so installFieldGuard was never even generated for
+  // the field: a later `instance.field = "not a function"` went through
+  // completely unguarded.
+  const { results } = runFunctionScenario([
+    'class WithArrowProperty { format: (x: number) => string = (x) => String(x); }',
+    'const w = new WithArrowProperty();',
+    'expectAccepted("initial-call", () => { if (w.format(1) !== "1") throw new Error("wrong result"); });',
+    'expectTypeError("non-function-write", () => { (w as any).format = "not a function"; });',
+    'expectAccepted("reassign-function", () => { w.format = (x) => `#${x}`; if (w.format(2) !== "#2") throw new Error("wrong result"); });',
+  ]);
+  assert.deepEqual(results, ['accepted:initial-call', 'rejected:non-function-write', 'accepted:reassign-function']);
+});
+
 test('an optional callback field accepts absence, undefined and a real function, and rejects a non-function', () => {
   const { results } = runFunctionScenario([
     'interface Opcional { onClick?: () => void; label: string; }',

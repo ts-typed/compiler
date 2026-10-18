@@ -97,12 +97,20 @@ export function installFieldGuard(
     return;
   }
 
-  if (!options.initialized && descriptor !== undefined) {
-    return;
-  }
-
   const currentValue = descriptor === undefined ? undefined : descriptor.value;
-  if (options.initialized) {
+  // A field with no inline initializer that keeps its PropertyDeclaration
+  // in the output (decorated fields do, to preserve decorator emission —
+  // see hasDecorators in create-contract-transformer.ts) is pre-defined by
+  // native class fields as `undefined` before the constructor body runs,
+  // which means a plain, non-accessor descriptor already exists here even
+  // though nothing has really initialized it yet. Treating "a descriptor
+  // exists" as "already handled by someone else" and bailing — the
+  // previous behavior — silently skipped guard installation for every
+  // such field, decorated or not. A real foreign value (anything other
+  // than that `undefined` placeholder) is the only case worth treating as
+  // already initialized here.
+  const isInitialized = options.initialized || (descriptor !== undefined && currentValue !== undefined);
+  if (isInitialized) {
     validateContract(contract, currentValue, context.operation);
     installContractProtection(contract, currentValue, context.operation);
   }
@@ -111,7 +119,7 @@ export function installFieldGuard(
     instance,
     key,
     currentValue,
-    options.initialized,
+    isInitialized,
     descriptor,
     contract,
     options.readonlyField === true,

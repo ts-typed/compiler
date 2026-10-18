@@ -147,6 +147,32 @@ test('a decorated field without an initializer is guarded once a value is assign
   `);
 });
 
+test('a decorated field with no inline initializer, assigned inside the constructor body (not via Object.assign), is still guarded', () => {
+  // Regression: a decorated field with no inline initializer keeps its
+  // PropertyDeclaration in the output (to preserve decorator emission),
+  // which native class fields (target >= ES2022) pre-define as `undefined`
+  // before the constructor body runs. installFieldGuard used to treat that
+  // pre-defined descriptor as "already handled by someone else" and give up
+  // silently, leaving the field completely unguarded for the rest of its
+  // life — this is exactly the common DTO shape of
+  // `class Dto { @IsString() name: string; constructor(data: Data) { this.name = data.name; } }`.
+  assertOk(`
+    class Dto {
+      @logged() name: string;
+      constructor(value: string) {
+        this.name = value;
+      }
+    }
+    const dto = new Dto("Ada");
+    if (calls.length !== 1 || calls[0] !== "name") throw new Error("decorator not applied: " + calls.join(","));
+    if (dto.name !== "Ada") throw new Error("constructor assignment lost: " + dto.name);
+    expectTypeError(() => { (dto as any).name = 123; });
+    if (dto.name !== "Ada") throw new Error("guard let an invalid write through");
+    dto.name = "Grace";
+    if (dto.name !== "Grace") throw new Error("valid write was not stored");
+  `);
+});
+
 test('a decorated parameter is validated and its decorator still runs', () => {
   assertOk(`
     class Service {

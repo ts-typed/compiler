@@ -299,14 +299,15 @@ test('a decorated field with a supported type produces no unsupported warning', 
   assert.equal(warning, undefined, JSON.stringify(report.coverage.warnings));
 });
 
-// A decorated member whose TYPE is genuinely unsupported (a callable, since Date is now a supported leaf) still fails
-// under onUnsupported=error, so decorators did not silently disable the check.
+// A decorated member whose TYPE is genuinely unsupported (a generic type parameter — Date and a plain
+// callable are now both supported leaves) still fails under onUnsupported=error, so decorators did not
+// silently disable the check.
 const DECORATED_UNSUPPORTED_SOURCE = [
   "import { StrictTypeError } from '@ts-typed/compiler';",
   'function tag(target: object, key: string): void { void target; void key; }',
-  'class Event { @tag when: () => number = () => 0; }',
-  'const event: Event = new Event();',
-  'process.stdout.write(String(event.when()));',
+  'class Event<T> { @tag when: T; constructor(when: T) { this.when = when; } }',
+  'const event: Event<number> = new Event(0);',
+  'process.stdout.write(String(event.when));',
 ].join('\n');
 
 test('compiler.onUnsupported=error still fails a decorated member whose type is unsupported', async () => {
