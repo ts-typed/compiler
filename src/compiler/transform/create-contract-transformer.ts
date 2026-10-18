@@ -242,6 +242,28 @@ function visitVariableDeclaration(
   visitor: ts.Visitor,
   context: ts.TransformationContext,
 ): ts.VariableDeclaration {
+  if (!typescript.isIdentifier(node.name) && node.initializer !== undefined) {
+    const destructuringSchema = getDestructuringSourceSchema(node, state, typescript);
+    if (destructuringSchema !== undefined) {
+      // Only the source value is guarded; the binding pattern stays exactly as written,
+      // so destructuring still runs once over the already-validated value.
+      const source = typescript.visitNode(node.initializer, visitor, isExpression) ?? node.initializer;
+      const descriptor = getDescriptorForNode(node, state, typescript);
+      if (descriptor !== undefined) {
+        state.handledContracts.add(descriptor);
+      }
+      return factory.updateVariableDeclaration(
+        node,
+        node.name,
+        node.exclamationToken,
+        node.type,
+        createProtectCall(factory, state, destructuringSchema, source, {
+          kind: 'variable',
+          name: node.name.getText(state.sourceFile),
+        }, 'initialize'),
+      );
+    }
+  }
   const descriptor = getDescriptorForNode(node, state, typescript);
   const initializer = node.initializer === undefined
     ? undefined
@@ -1762,6 +1784,30 @@ function getTypeArgumentAt(
     return undefined;
   }
   return checker.getTypeArguments(objectType as ts.TypeReference)[index];
+}
+
+/**
+ * Schema that guards the whole source value of a destructuring declaration
+ * (`const { a }: T = value`). The declared type is the annotation when present,
+ * otherwise the type of the source expression. Returns undefined when the type
+ * cannot be materialized, so the caller keeps the unguarded path.
+ */
+function getDestructuringSourceSchema(
+  node: ts.VariableDeclaration,
+  state: FileTransformState,
+  typescript: typeof import('typescript'),
+): Schema | undefined {
+  if (node.initializer === undefined) {
+    return undefined;
+  }
+  const checker = optionsForState(state).analysis.checker;
+  const type = node.type !== undefined
+    ? checker.getTypeFromTypeNode(node.type)
+    : checker.getTypeAtLocation(node.initializer);
+  if (isUncheckableType(type, typescript)) {
+    return undefined;
+  }
+  return optionsForState(state).analysis.resolver.resolve(type, node).schema;
 }
 
 function isUncheckableType(type: ts.Type, typescript: typeof import('typescript')): boolean {

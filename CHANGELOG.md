@@ -4,6 +4,12 @@ All notable changes to `@ts-typed/compiler` are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.1.4] - 2026-10-17
+
+### Added
+
+- A destructured variable declaration (`const { age }: Profile = value;`, `const [first]: number[] = value;`) now validates the WHOLE source value against its declared (or, absent an annotation, inferred) type before destructuring extracts individual bindings — resolved directly by the type resolver at transform time. Individual bindings are not validated separately; validating the source as a whole already covers the real case of a malformed value escaping validation through destructuring. Destructured function parameters remain unsupported (a harder, separate problem: it would require rewriting the function's own signature).
+
 ## [0.1.3] - 2026-10-17
 
 Continues the same fix/test/document loop against the real teste-ts-typed app.
