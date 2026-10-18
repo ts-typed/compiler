@@ -44,6 +44,19 @@ const installedDataGuards = new WeakMap<
   Map<PropertyKey, DataPropertyGuardState>
 >();
 
+/**
+ * Mutation-guard proxies already created for an underlying array, so the same
+ * array crossing the same typed boundary twice yields the same proxy.
+ */
+interface MutationGuardEntry {
+  readonly schema: Schema;
+  readonly context: AssertionContext;
+  readonly proxy: unknown[];
+}
+
+const mutationGuardEntries = new WeakMap<object, MutationGuardEntry[]>();
+const mutationGuardProxies = new WeakSet<object>();
+
 export function protectValue(
   schema: Schema,
   value: unknown,
@@ -58,7 +71,77 @@ export function protectValue(
 
   assertValue(prepared.schema, value, prepared.context);
   installProtection(prepared.schema, value, prepared.context, createProtectionState());
+  if (context.enforceMutationGuards === true && Array.isArray(value)) {
+    return guardArrayMutations(prepared.schema, value, prepared.context);
+  }
   return value;
+}
+
+/**
+ * Returns a Proxy over `array` whose element and `length` writes are checked
+ * against the array's item schema, so a later `push('wrong')` or
+ * `arr[5] = 'wrong'` throws a `StrictTypeError` instead of succeeding. Only
+ * `set` and `deleteProperty` are trapped: deletions (including the ones
+ * `length` truncation performs internally) are forwarded unchanged, and
+ * `length` writes are not validated because they introduce no element.
+ * Schemas that do not resolve to an array (tuples, maps, sets, objects) are
+ * returned untouched.
+ */
+function guardArrayMutations(
+  schema: Schema,
+  array: unknown[],
+  context: AssertionContext,
+): unknown[] {
+  if (mutationGuardProxies.has(array)) {
+    return array;
+  }
+  const resolved = resolveReference(schema, context);
+  if (resolved.kind !== 'array') {
+    return array;
+  }
+
+  const entries = mutationGuardEntries.get(array) ?? [];
+  const existing = entries.find(
+    (entry) =>
+      entry.schema === resolved &&
+      entry.context.propertyPath === context.propertyPath &&
+      entry.context.registry === context.registry,
+  );
+  if (existing !== undefined) {
+    return existing.proxy;
+  }
+
+  const items = resolved.items;
+  const proxy = new Proxy(array, {
+    set(target, property: string | symbol, nextValue: unknown): boolean {
+      if (isArrayIndexKey(property)) {
+        const itemContext: AssertionContext = {
+          ...context,
+          propertyPath: `${context.propertyPath}[${property}]`,
+          operation: 'mutate',
+        };
+        assertValue(items, nextValue, itemContext);
+        installProtection(items, nextValue, itemContext, createProtectionState());
+      }
+      return Reflect.set(target, property, nextValue, target);
+    },
+    deleteProperty(target, property: string | symbol): boolean {
+      return Reflect.deleteProperty(target, property);
+    },
+  });
+
+  entries.push({ schema: resolved, context, proxy });
+  mutationGuardEntries.set(array, entries);
+  mutationGuardProxies.add(proxy);
+  return proxy;
+}
+
+function isArrayIndexKey(property: string | symbol): property is string {
+  return (
+    typeof property === 'string' &&
+    /^(0|[1-9]\d*)$/.test(property) &&
+    Number(property) < 4_294_967_295
+  );
 }
 
 export function installFieldGuard(

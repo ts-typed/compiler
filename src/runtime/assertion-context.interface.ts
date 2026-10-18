@@ -25,4 +25,5 @@ export interface AssertionContext {
   readonly functionName?: string;
   readonly registry?: SchemaRegistry;
   readonly allowExtraPropertiesAll?: boolean;
+  readonly enforceMutationGuards?: boolean;
 }

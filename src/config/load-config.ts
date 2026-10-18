@@ -180,6 +180,9 @@ const validateCompiler = (value: JsonValue | undefined, path: string): void => {
   if (value.enforceClosedInstances !== undefined) {
     requireBoolean(value.enforceClosedInstances, `${path}.enforceClosedInstances`);
   }
+  if (value.enforceMutationGuards !== undefined) {
+    requireBoolean(value.enforceMutationGuards, `${path}.enforceMutationGuards`);
+  }
 };
 
 const validateNcc = (value: JsonValue | undefined, path: string): void => {
@@ -381,6 +384,7 @@ const toProjectConfig = (value: JsonObject): ProjectConfig => {
       enforcePrivate: requireBoolean(compiler.enforcePrivate, 'compiler.enforcePrivate'),
       enforceReadonly: requireBoolean(compiler.enforceReadonly, 'compiler.enforceReadonly'),
       enforceClosedInstances: requireBoolean(compiler.enforceClosedInstances, 'compiler.enforceClosedInstances'),
+      enforceMutationGuards: requireBoolean(compiler.enforceMutationGuards, 'compiler.enforceMutationGuards'),
     },
     ncc: {
       enabled: requireBoolean(ncc.enabled, 'ncc.enabled'),

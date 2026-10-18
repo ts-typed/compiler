@@ -108,6 +108,11 @@
           "type": "boolean",
           "description": "Make class instances non-extensible once construction completes (Object.preventExtensions), so properties not declared on the class cannot be added afterward, string or symbol keys alike. Opt-in: libraries that copy every key of a request body onto `new Dto()` before filtering (e.g. class-transformer with ValidationPipe whitelist) will throw a native TypeError unless configured to write only declared keys (e.g. excludeExtraneousValues with @Expose()).",
           "default": false
+        },
+        "enforceMutationGuards": {
+          "type": "boolean",
+          "description": "Wrap arrays that cross a typed boundary in a Proxy so that later mutations (push, splice, index or length writes) of an item that fails the element schema throw a StrictTypeError instead of succeeding silently. Opt-in: adds a Proxy per guarded array and a validation step on every element write.",
+          "default": false
         }
       },
       "default": {
@@ -116,7 +121,8 @@
         "strictClass": false,
         "enforcePrivate": true,
         "enforceReadonly": true,
-        "enforceClosedInstances": false
+        "enforceClosedInstances": false,
+        "enforceMutationGuards": false
       }
     },
     "ncc": {

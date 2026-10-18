@@ -19,6 +19,7 @@ export const COMPILER_KEYS = new Set([
   'enforcePrivate',
   'enforceReadonly',
   'enforceClosedInstances',
+  'enforceMutationGuards',
 ]);
 
 export const NCC_KEYS = new Set([

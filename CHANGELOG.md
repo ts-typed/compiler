@@ -4,6 +4,14 @@ All notable changes to `@ts-typed/compiler` are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.1.8] - 2026-10-18
+
+### Added
+
+- A new opt-in `compiler.enforceMutationGuards` config flag (default `false`) closes the `ARRAY_MUTATION` gap for the common case: when set to `true`, an array crossing a typed boundary (e.g. `const scores: number[] = value;`) is wrapped in a `Proxy` whose `set` trap validates any new element written to a numeric index — directly (`scores[3] = 'x'`), or indirectly through a mutating method that writes indices under the hood (`.push()`, `.splice()`, `.unshift()`, …) — against the array's item schema before the write is allowed to go through, throwing `StrictTypeError` (`operation: 'mutate'`, same `TYPE_MISMATCH` shape as any other boundary violation) on a mismatch. `length` reads/writes are left alone (truncating or growing an array is not itself a type violation). This is opt-in because validating every element write has a real per-write cost, and because the wrapped proxy is a different object reference from the original array — any code comparing the two by identity after assignment would need to be aware of it.
+
+  **Known limitations, not covered by this release:** only the direct result of a boundary crossing is wrapped — an array stored in a typed class field (assigned through `installFieldGuard`'s own setter path) is not wrapped, nor is an array nested inside a plain object/another array. A value typed as `T[] | undefined` (or any other union containing an array) is not wrapped, since the schema resolves to `kind: 'union'`, not `kind: 'array'`, at the point `protectValue` runs — a real gap for the common optional-array case, left for a follow-up. A reference to the same array taken BEFORE it crosses the boundary (`const raw = []; const typed: number[] = raw; raw.push('x')`) bypasses the proxy entirely, since `raw` was never replaced by the wrapped value. `Map`/`Set` mutation (`.set()`/`.add()` after the boundary) remains open as the separate `MAP_SET_MUTATION` gap.
+
 ## [0.1.7] - 2026-10-18
 
 ### Added

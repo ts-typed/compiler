@@ -38,5 +38,12 @@ export interface ContractTransformerOptions {
    * TypeError unless configured to write only declared keys.
    */
   readonly enforceClosedInstances?: boolean;
+  /**
+   * When true, an array that crosses a typed boundary via `protectValue` is
+   * wrapped in a Proxy so that later `push`/`splice`/index/`length` writes of
+   * an invalid item throw a `StrictTypeError` instead of succeeding silently.
+   * Opt-in; default off.
+   */
+  readonly enforceMutationGuards?: boolean;
   readonly onDiagnostic?: (diagnostic: CoverageDiagnostic) => void;
 }

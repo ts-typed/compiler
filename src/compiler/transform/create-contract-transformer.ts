@@ -1665,6 +1665,9 @@ function createContextExpression(
   if (optionsForState(state).allowExtraPropertiesAll === true) {
     members.push(factory.createPropertyAssignment('allowExtraPropertiesAll', factory.createTrue()));
   }
+  if (optionsForState(state).enforceMutationGuards === true) {
+    members.push(factory.createPropertyAssignment('enforceMutationGuards', factory.createTrue()));
+  }
   if (functionName !== undefined) {
     members.push(factory.createPropertyAssignment('functionName', factory.createStringLiteral(functionName)));
   }

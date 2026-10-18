@@ -5,6 +5,7 @@ export interface CompilerConfig {
   readonly enforcePrivate: boolean;
   readonly enforceReadonly: boolean;
   readonly enforceClosedInstances: boolean;
+  readonly enforceMutationGuards: boolean;
 }
 
 export interface NccConfig {

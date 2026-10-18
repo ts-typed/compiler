@@ -336,6 +336,7 @@ test('schema keys and defaults match the documented generated configuration', ()
       enforcePrivate: true,
       enforceReadonly: true,
       enforceClosedInstances: false,
+      enforceMutationGuards: false,
     },
     ncc: {
       enabled: true,
@@ -438,4 +439,18 @@ test('enforceClosedInstances defaults to false, accepts a true override, and rej
 
   const invalidFile = writeJson(directory, 'invalid.json', { compiler: { enforceClosedInstances: 'yes' } });
   await assert.rejects(() => loadConfig(invalidFile), /compiler\.enforceClosedInstances must be boolean/);
+});
+
+test('enforceMutationGuards defaults to false, accepts a true override, and rejects non-boolean values', async (t) => {
+  const directory = createTemporaryDirectory(t);
+  const projectFile = writeJson(directory, 'typets.config.json', {});
+
+  const defaults = await loadConfig(projectFile);
+  assert.equal(defaults.compiler.enforceMutationGuards, false);
+
+  const overridden = await loadConfig(projectFile, { compiler: { enforceMutationGuards: true } });
+  assert.equal(overridden.compiler.enforceMutationGuards, true);
+
+  const invalidFile = writeJson(directory, 'invalid.json', { compiler: { enforceMutationGuards: 'yes' } });
+  await assert.rejects(() => loadConfig(invalidFile), /compiler\.enforceMutationGuards must be boolean/);
 });
