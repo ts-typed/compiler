@@ -4,6 +4,14 @@ All notable changes to `@ts-typed/compiler` are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.1.9] - 2026-10-18
+
+### Added
+
+- `compiler.enforceMutationGuards` now also covers `MAP_SET_MUTATION`: a `Map`/`Set` crossing a typed boundary gets wrapped in a `Proxy` whose `.set()` (Map) / `.add()` (Set) are replaced with validating wrappers — a Map's key AND value, or a Set's item, are checked against the declared schema before the real entry is written, throwing `StrictTypeError` (`operation: 'mutate'`) on a mismatch instead of silently accepting it. `.delete()`/`.clear()` need no validation (removing an entry can't introduce a violation) and are forwarded as-is. Because `Map`/`Set` store entries in an internal engine slot that only the genuine `Map.prototype`/`Set.prototype` methods can touch, every read and every forwarded call runs against the real underlying collection, never against the proxy itself — the wrapped `.set()`/`.add()` return the proxy (not the raw target) so chained calls (`map.set(a, 1).set(b, 2)`) keep going through the guard.
+
+  **Known limitations, not covered by this release:** `WeakMap`/`WeakSet` remain entirely unguarded (same as before this change — they were already out of scope for the boundary-crossing check too). A reference to the collection obtained through `.forEach()`'s third callback argument is the raw, unwrapped target, so mutating through it bypasses the guard. Method references taken off the proxy are rebuilt on every property access (`map.get !== map.get` across two reads) — functionally harmless, but not something to rely on for identity comparisons.
+
 ## [0.1.8] - 2026-10-18
 
 ### Added

@@ -71,8 +71,16 @@ export function protectValue(
 
   assertValue(prepared.schema, value, prepared.context);
   installProtection(prepared.schema, value, prepared.context, createProtectionState());
-  if (context.enforceMutationGuards === true && Array.isArray(value)) {
-    return guardArrayMutations(prepared.schema, value, prepared.context);
+  if (context.enforceMutationGuards === true) {
+    if (Array.isArray(value)) {
+      return guardArrayMutations(prepared.schema, value, prepared.context);
+    }
+    if (value instanceof Map) {
+      return guardMapMutations(prepared.schema, value, prepared.context);
+    }
+    if (value instanceof Set) {
+      return guardSetMutations(prepared.schema, value, prepared.context);
+    }
   }
   return value;
 }
@@ -142,6 +150,154 @@ function isArrayIndexKey(property: string | symbol): property is string {
     /^(0|[1-9]\d*)$/.test(property) &&
     Number(property) < 4_294_967_295
   );
+}
+
+/**
+ * Proxies already created for an underlying Map or Set, keyed by the
+ * collection and reused when the same collection crosses the same boundary
+ * again. Kept apart from `mutationGuardEntries` so the array path is untouched.
+ */
+interface CollectionMutationGuardEntry {
+  readonly schema: Schema;
+  readonly context: AssertionContext;
+  readonly proxy: object;
+}
+
+const collectionMutationEntries = new WeakMap<object, CollectionMutationGuardEntry[]>();
+
+/**
+ * Map/Set counterpart of `guardArrayMutations`. Both collections keep their
+ * entries in an internal slot that only the genuine `Map.prototype` /
+ * `Set.prototype` methods can read, so a Proxy must never be used as `this`
+ * for them: every read is performed on the real target, and only `set`
+ * (Map) and `add` (Set) are replaced with validating wrappers. `delete` and
+ * `clear` remove entries and cannot introduce a type violation, so they are
+ * forwarded unchanged. The wrappers return the proxy so chained calls such as
+ * `map.set(a, 1).set(b, 2)` keep going through the guarded version.
+ */
+function guardMapMutations(
+  schema: Schema,
+  map: Map<unknown, unknown>,
+  context: AssertionContext,
+): Map<unknown, unknown> {
+  if (mutationGuardProxies.has(map)) {
+    return map;
+  }
+  const resolved = resolveReference(schema, context);
+  if (resolved.kind !== 'map') {
+    return map;
+  }
+  const existing = findCollectionMutationProxy(map, resolved, context);
+  if (existing !== undefined) {
+    return existing as Map<unknown, unknown>;
+  }
+
+  const keySchema = resolved.key;
+  const valueSchema = resolved.value;
+  const proxy: Map<unknown, unknown> = new Proxy(map, {
+    get(target, property: string | symbol): unknown {
+      if (property === 'set') {
+        return (key: unknown, entryValue: unknown): Map<unknown, unknown> => {
+          const keyContext = mutationEntryContext(context, `${context.propertyPath}<mutate>.key`);
+          assertValue(keySchema, key, keyContext);
+          installProtection(keySchema, key, keyContext, createProtectionState());
+          const valueContext = mutationEntryContext(context, `${context.propertyPath}<mutate>.value`);
+          assertValue(valueSchema, entryValue, valueContext);
+          installProtection(valueSchema, entryValue, valueContext, createProtectionState());
+          target.set(key, entryValue);
+          return proxy;
+        };
+      }
+      if (property === 'delete') {
+        return (key: unknown): boolean => target.delete(key);
+      }
+      if (property === 'clear') {
+        return (): void => target.clear();
+      }
+      const member = Reflect.get(target, property, target);
+      return typeof member === 'function' ? member.bind(target) : member;
+    },
+  });
+
+  rememberCollectionMutationProxy(map, resolved, context, proxy);
+  return proxy;
+}
+
+/**
+ * Set counterpart of `guardMapMutations`: `add` validates the item before it
+ * reaches the real set, and everything else is read from the real target.
+ */
+function guardSetMutations(
+  schema: Schema,
+  set: Set<unknown>,
+  context: AssertionContext,
+): Set<unknown> {
+  if (mutationGuardProxies.has(set)) {
+    return set;
+  }
+  const resolved = resolveReference(schema, context);
+  if (resolved.kind !== 'set') {
+    return set;
+  }
+  const existing = findCollectionMutationProxy(set, resolved, context);
+  if (existing !== undefined) {
+    return existing as Set<unknown>;
+  }
+
+  const itemSchema = resolved.item;
+  const proxy: Set<unknown> = new Proxy(set, {
+    get(target, property: string | symbol): unknown {
+      if (property === 'add') {
+        return (item: unknown): Set<unknown> => {
+          const itemContext = mutationEntryContext(context, `${context.propertyPath}<mutate>`);
+          assertValue(itemSchema, item, itemContext);
+          installProtection(itemSchema, item, itemContext, createProtectionState());
+          target.add(item);
+          return proxy;
+        };
+      }
+      if (property === 'delete') {
+        return (item: unknown): boolean => target.delete(item);
+      }
+      if (property === 'clear') {
+        return (): void => target.clear();
+      }
+      const member = Reflect.get(target, property, target);
+      return typeof member === 'function' ? member.bind(target) : member;
+    },
+  });
+
+  rememberCollectionMutationProxy(set, resolved, context, proxy);
+  return proxy;
+}
+
+function mutationEntryContext(context: AssertionContext, propertyPath: string): AssertionContext {
+  return { ...context, propertyPath, operation: 'mutate' };
+}
+
+function findCollectionMutationProxy(
+  collection: object,
+  schema: Schema,
+  context: AssertionContext,
+): object | undefined {
+  return (collectionMutationEntries.get(collection) ?? []).find(
+    (entry) =>
+      entry.schema === schema &&
+      entry.context.propertyPath === context.propertyPath &&
+      entry.context.registry === context.registry,
+  )?.proxy;
+}
+
+function rememberCollectionMutationProxy(
+  collection: object,
+  schema: Schema,
+  context: AssertionContext,
+  proxy: object,
+): void {
+  const entries = collectionMutationEntries.get(collection) ?? [];
+  entries.push({ schema, context, proxy });
+  collectionMutationEntries.set(collection, entries);
+  mutationGuardProxies.add(proxy);
 }
 
 export function installFieldGuard(

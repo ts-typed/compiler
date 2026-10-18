@@ -233,3 +233,178 @@ test('protectValue leaves tuple schemas unwrapped even with enforceMutationGuard
   };
   assert.strictEqual(guards.protectValue(schema, value, context), value);
 });
+
+/**
+ * Builds a snippet that crosses a `Map<string, number>` boundary (and a
+ * `Set<number>` boundary), then runs `body` against the typed `map` / `set`.
+ */
+function collectionSnippet(body) {
+  return [
+    'const mapValue: any = new Map([["a", 1]]);',
+    'const map: Map<string, number> = mapValue;',
+    'const setValue: any = new Set([1]);',
+    'const set: Set<number> = setValue;',
+    body,
+  ].join('\n');
+}
+
+test('compiler.enforceMutationGuards defaults off: map.set and set.add of wrong types still succeed', () => {
+  const body = collectionSnippet([
+    'const looseMap: any = map;',
+    'const looseSet: any = set;',
+    'map.set("b", "wrong" as any);',
+    'if (looseMap.get("b") !== "wrong") throw new Error("map.set was rejected");',
+    'set.add("wrong" as any);',
+    'if (!looseSet.has("wrong")) throw new Error("set.add was rejected");',
+    'process.stdout.write("OK");',
+  ].join('\n'));
+
+  assert.equal(runSnippet(body), 'OK');
+  assert.equal(runSnippet(body, { enforceMutationGuards: false }), 'OK');
+});
+
+test('compiler.enforceMutationGuards rejects map.set with a wrong-typed value and leaves the map unchanged', () => {
+  const stdout = runSnippet(
+    collectionSnippet([
+      'let caught: any;',
+      'try { map.set("b", "wrong" as any); } catch (error) { caught = error; }',
+      'if (caught === undefined) throw new Error("map.set was accepted");',
+      'if (caught.name !== "StrictTypeError") throw new Error("expected StrictTypeError, got " + caught.name);',
+      'if (caught.propertyPath !== "map<mutate>.value") throw new Error("unexpected path " + caught.propertyPath);',
+      'if (caught.operation !== "mutate") throw new Error("unexpected operation " + caught.operation);',
+      'if (map.size !== 1 || map.has("b")) throw new Error("bad entry was stored");',
+      'process.stdout.write("OK");',
+    ].join('\n')),
+    { enforceMutationGuards: true },
+  );
+  assert.equal(stdout, 'OK');
+});
+
+test('compiler.enforceMutationGuards rejects map.set with a wrong-typed key', () => {
+  const stdout = runSnippet(
+    collectionSnippet([
+      'const looseMap: any = map;',
+      'let caught: any;',
+      'try { map.set(7 as any, 2); } catch (error) { caught = error; }',
+      'if (caught === undefined || caught.name !== "StrictTypeError") throw new Error("wrong key was accepted");',
+      'if (caught.propertyPath !== "map<mutate>.key") throw new Error("unexpected path " + caught.propertyPath);',
+      'if (map.size !== 1 || looseMap.has(7)) throw new Error("bad key was stored");',
+      'process.stdout.write("OK");',
+    ].join('\n')),
+    { enforceMutationGuards: true },
+  );
+  assert.equal(stdout, 'OK');
+});
+
+test('compiler.enforceMutationGuards rejects set.add of a wrong-typed item and leaves the set unchanged', () => {
+  const stdout = runSnippet(
+    collectionSnippet([
+      'const looseSet: any = set;',
+      'let caught: any;',
+      'try { set.add("wrong" as any); } catch (error) { caught = error; }',
+      'if (caught === undefined || caught.name !== "StrictTypeError") throw new Error("set.add was accepted");',
+      'if (caught.propertyPath !== "set<mutate>") throw new Error("unexpected path " + caught.propertyPath);',
+      'if (set.size !== 1 || looseSet.has("wrong")) throw new Error("bad item was stored");',
+      'process.stdout.write("OK");',
+    ].join('\n')),
+    { enforceMutationGuards: true },
+  );
+  assert.equal(stdout, 'OK');
+});
+
+test('compiler.enforceMutationGuards still allows valid map.set, chained set calls and set.add', () => {
+  const stdout = runSnippet(
+    collectionSnippet([
+      'map.set("b", 2).set("c", 3);',
+      'if (map.size !== 3 || map.get("b") !== 2 || map.get("c") !== 3) throw new Error("valid chained map.set failed");',
+      'set.add(2).add(3);',
+      'if (set.size !== 3 || !set.has(2) || !set.has(3)) throw new Error("valid chained set.add failed");',
+      'process.stdout.write("OK");',
+    ].join('\n')),
+    { enforceMutationGuards: true },
+  );
+  assert.equal(stdout, 'OK');
+});
+
+test('compiler.enforceMutationGuards forwards delete and clear without validation', () => {
+  const stdout = runSnippet(
+    collectionSnippet([
+      'map.set("b", 2);',
+      'if (map.delete("b") !== true || map.has("b")) throw new Error("map.delete failed");',
+      'if (map.delete("missing") !== false) throw new Error("map.delete return value wrong");',
+      'map.clear();',
+      'if (map.size !== 0) throw new Error("map.clear failed");',
+      'set.add(5);',
+      'if (set.delete(5) !== true || set.has(5)) throw new Error("set.delete failed");',
+      'set.clear();',
+      'if (set.size !== 0) throw new Error("set.clear failed");',
+      'process.stdout.write("OK");',
+    ].join('\n')),
+    { enforceMutationGuards: true },
+  );
+  assert.equal(stdout, 'OK');
+});
+
+test('compiler.enforceMutationGuards keeps get, has, size and iteration working on the wrapped collections', () => {
+  const stdout = runSnippet(
+    collectionSnippet([
+      'if (map.get("a") !== 1 || map.has("a") !== true || map.size !== 1) throw new Error("map reads broke");',
+      'if (JSON.stringify([...map.keys()]) !== "[\\"a\\"]") throw new Error("map.keys broke");',
+      'if (JSON.stringify([...map.values()]) !== "[1]") throw new Error("map.values broke");',
+      'if (JSON.stringify([...map.entries()]) !== "[[\\"a\\",1]]") throw new Error("map.entries broke");',
+      'const seenEntries = []; for (const [k, v] of map) seenEntries.push(k + "=" + v);',
+      'if (seenEntries.join(",") !== "a=1") throw new Error("map for...of broke");',
+      'if (set.has(1) !== true || set.size !== 1) throw new Error("set reads broke");',
+      'if (JSON.stringify([...set.values()]) !== "[1]") throw new Error("set.values broke");',
+      'const seenItems = []; for (const item of set) seenItems.push(item);',
+      'if (seenItems.join(",") !== "1") throw new Error("set for...of broke");',
+      'process.stdout.write("OK");',
+    ].join('\n')),
+    { enforceMutationGuards: true },
+  );
+  assert.equal(stdout, 'OK');
+});
+
+test('compiler.enforceMutationGuards keeps instanceof Map and instanceof Set true for the wrapped collections', () => {
+  const stdout = runSnippet(
+    collectionSnippet([
+      'if (!(map instanceof Map)) throw new Error("wrapped map is not instanceof Map");',
+      'if (!(set instanceof Set)) throw new Error("wrapped set is not instanceof Set");',
+      'process.stdout.write("OK");',
+    ].join('\n')),
+    { enforceMutationGuards: true },
+  );
+  assert.equal(stdout, 'OK');
+});
+
+test('protectValue wraps Map and Set only when enforceMutationGuards is set, and reuses the same proxy', () => {
+  const mapSchema = {
+    kind: 'map',
+    key: { kind: 'primitive', name: 'string' },
+    value: { kind: 'primitive', name: 'number' },
+  };
+  const setSchema = { kind: 'set', item: { kind: 'primitive', name: 'number' } };
+  const baseContext = { contractKind: 'variable', propertyPath: 'lookup', operation: 'set' };
+  const guardedContext = { ...baseContext, enforceMutationGuards: true };
+
+  const plainMap = new Map([['a', 1]]);
+  assert.strictEqual(guards.protectValue(mapSchema, plainMap, baseContext), plainMap);
+
+  const rawMap = new Map([['a', 1]]);
+  const mapProxy = guards.protectValue(mapSchema, rawMap, guardedContext);
+  assert.notStrictEqual(mapProxy, rawMap);
+  assert.strictEqual(guards.protectValue(mapSchema, rawMap, guardedContext), mapProxy);
+  assert.strictEqual(guards.protectValue(mapSchema, mapProxy, guardedContext), mapProxy);
+  assert.throws(() => mapProxy.set('b', 'wrong'), runtime.StrictTypeError);
+  assert.equal(rawMap.has('b'), false);
+
+  const plainSet = new Set([1]);
+  assert.strictEqual(guards.protectValue(setSchema, plainSet, baseContext), plainSet);
+
+  const rawSet = new Set([1]);
+  const setProxy = guards.protectValue(setSchema, rawSet, guardedContext);
+  assert.notStrictEqual(setProxy, rawSet);
+  assert.strictEqual(guards.protectValue(setSchema, rawSet, guardedContext), setProxy);
+  assert.throws(() => setProxy.add('wrong'), runtime.StrictTypeError);
+  assert.equal(rawSet.has('wrong'), false);
+});
