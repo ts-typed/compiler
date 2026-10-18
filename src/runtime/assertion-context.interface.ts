@@ -23,6 +23,7 @@ export interface AssertionContext {
     | 'assert';
   readonly className?: string;
   readonly functionName?: string;
+  readonly isServerPopulated?: boolean;
   readonly registry?: SchemaRegistry;
   readonly allowExtraPropertiesAll?: boolean;
   readonly enforceMutationGuards?: boolean;

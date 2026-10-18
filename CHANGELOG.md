@@ -4,6 +4,12 @@ All notable changes to `@ts-typed/compiler` are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.1.12] - 2026-10-18
+
+### Added
+
+- A new class-level `ServerPopulated()` decorator (mirroring the existing `AllowExtraProperties()`), for marking a class whose instances are populated by the server/database rather than by client input — the intended use is a TypeORM `@Entity()` class. When a `StrictTypeError` is thrown for a declared field on a `@ServerPopulated()`-marked instance, the error instance carries `isServerPopulated: true`; for an unmarked class it's `undefined`. **This flag is deliberately excluded from `StrictTypeError#toJSON()`** — it is an internal signal for code that catches the real exception object (like `@ts-typed/nestjs`'s `StrictTypeErrorFilter`, coming in a follow-up release of that package), never something serialized into an HTTP response body. This is the compiler/runtime half of closing `FILTER_STATUS_FOR_ENTITY_HYDRATION`: a filter can now tell "this field belongs to a server-populated Entity, a wrong value here is a server/database fault" apart from "this field belongs to a request DTO, a wrong value here is a client's bad input" — something `contractKind`/`operation` alone could never express, since a TypeORM Entity's field and a `class-transformer`-populated DTO's field both go through the exact same `contractKind: 'property'` path.
+
 ## [0.1.11] - 2026-10-18
 
 ### Added

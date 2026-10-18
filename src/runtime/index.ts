@@ -5,6 +5,7 @@ export {
   AllowExtraProperties,
   isExtraPropertiesAllowed,
 } from './allow-extra-properties.decorator';
+export { ServerPopulated, isServerPopulated } from './server-populated.decorator';
 export {
   StrictClass,
   StructuralClass,

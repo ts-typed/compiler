@@ -5,6 +5,7 @@ export interface StrictTypeErrorInfo {
   readonly code: StrictTypeErrorCode;
   readonly className?: string;
   readonly functionName?: string;
+  readonly isServerPopulated?: boolean;
   readonly contractKind: AssertionContext['contractKind'];
   readonly propertyPath: string;
   readonly expected: string;

@@ -1,4 +1,5 @@
 import { isExtraPropertiesAllowed } from '../allow-extra-properties.decorator';
+import { isServerPopulated } from '../server-populated.decorator';
 import { assertValue } from '../assert-value';
 import type { AssertionContext } from '../assertion-context.interface';
 import type {
@@ -407,9 +408,12 @@ export function installFieldGuard(
   context: AssertionContext,
   options: FieldGuardOptions,
 ): void {
+  const fieldContext: AssertionContext = isServerPopulated(instance)
+    ? { ...context, isServerPopulated: true }
+    : context;
   const contract: GuardContract = {
     schema,
-    context,
+    context: fieldContext,
     allowDirectExtraProperties:
       options.allowExtraProperties === true ||
       isExtraPropertiesAllowed(instance, decoratorPropertyKey(key)),
@@ -760,10 +764,13 @@ function installObjectProtection(
   state: ProtectionState,
 ): void {
   const declaredKeys = new Set<PropertyKey>(Reflect.ownKeys(schema.properties));
+  const ownerContext: AssertionContext = isServerPopulated(value)
+    ? { ...context, isServerPopulated: true }
+    : context;
 
   for (const key of declaredKeys) {
     const property = schema.properties[key];
-    const propertyContext = nestedContext(context, key);
+    const propertyContext = nestedContext(ownerContext, key);
     const installedGuard = getInstalledGuard(value, key);
     if (installedGuard !== undefined) {
       addContractAndProtect(
@@ -1060,7 +1067,8 @@ function contractsMatch(
     left.context.className === right.context.className &&
     left.context.functionName === right.context.functionName &&
     left.context.registry === right.context.registry &&
-    left.context.allowExtraPropertiesAll === right.context.allowExtraPropertiesAll
+    left.context.allowExtraPropertiesAll === right.context.allowExtraPropertiesAll &&
+    left.context.isServerPopulated === right.context.isServerPopulated
   );
 }
 

@@ -517,6 +517,7 @@ function fail(
     code,
     ...(context.className === undefined ? {} : { className: context.className }),
     ...(context.functionName === undefined ? {} : { functionName: context.functionName }),
+    ...(context.isServerPopulated === true ? { isServerPopulated: true } : {}),
     contractKind: context.contractKind,
     propertyPath: path,
     expected,
