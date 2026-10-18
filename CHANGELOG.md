@@ -4,6 +4,14 @@ All notable changes to `@ts-typed/compiler` are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.1.17] - 2026-10-18
+
+### Added
+
+- A new `TypeErrorResponse(message, status?)` property decorator lets an application attach a custom, HTTP-facing message (and optional status code) to a specific class field. When a `StrictTypeError` is thrown for that field, the error carries `typeErrorResponseMessage`/`typeErrorResponseStatus`. **Both are deliberately excluded from `StrictTypeError#toJSON()`** — same non-leak rule as `ServerPopulated()`'s `isServerPopulated` (0.1.12) — they are an internal signal for code that catches the real exception object, never serialized into a generic JSON error body. This package has no HTTP awareness on its own; a follow-up `@ts-typed/nestjs` release reads these fields to build a fully custom `HttpException` for a decorated DTO field, as an alternative to `class-validator`'s per-property messages. The fields are scoped per-property: a parent property's custom response does not leak into a nested child property's own violation.
+
+  This is deliberately a single-violation mechanism (fail-fast), consistent with how the rest of ts-typed works today — it customizes the response for whichever ONE violation happens to fire on the decorated property, not an aggregate of multiple violations across an object (that would be a separate, materially larger architectural change: ts-typed validates and populates a DTO field-by-field as `class-transformer` assigns each one, throwing on the first bad field, unlike `class-validator`'s "populate everything, then validate the whole object in one pass, collect every violation" model).
+
 ## [0.1.16] - 2026-10-18
 
 ### Added

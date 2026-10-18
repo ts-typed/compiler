@@ -6,6 +6,8 @@ export interface StrictTypeErrorInfo {
   readonly className?: string;
   readonly functionName?: string;
   readonly isServerPopulated?: boolean;
+  readonly typeErrorResponseMessage?: string;
+  readonly typeErrorResponseStatus?: number;
   readonly contractKind: AssertionContext['contractKind'];
   readonly propertyPath: string;
   readonly expected: string;

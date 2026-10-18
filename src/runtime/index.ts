@@ -6,6 +6,8 @@ export {
   isExtraPropertiesAllowed,
 } from './allow-extra-properties.decorator';
 export { ServerPopulated, isServerPopulated } from './server-populated.decorator';
+export { TypeErrorResponse, getTypeErrorResponse } from './type-error-response.decorator';
+export type { TypeErrorResponseOptions } from './type-error-response.decorator';
 export {
   StrictClass,
   StructuralClass,

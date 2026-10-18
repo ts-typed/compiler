@@ -6,6 +6,8 @@ export class StrictTypeError extends TypeError {
   public readonly className?: string;
   public readonly functionName?: string;
   public readonly isServerPopulated?: boolean;
+  public readonly typeErrorResponseMessage?: string;
+  public readonly typeErrorResponseStatus?: number;
   public readonly contractKind: StrictTypeErrorInfo['contractKind'];
   public readonly propertyPath: string;
   public readonly expected: string;
@@ -19,6 +21,8 @@ export class StrictTypeError extends TypeError {
     this.className = info.className;
     this.functionName = info.functionName;
     this.isServerPopulated = info.isServerPopulated;
+    this.typeErrorResponseMessage = info.typeErrorResponseMessage;
+    this.typeErrorResponseStatus = info.typeErrorResponseStatus;
     this.contractKind = info.contractKind;
     this.propertyPath = info.propertyPath;
     this.expected = info.expected;

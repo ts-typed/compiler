@@ -1,5 +1,6 @@
 import { isExtraPropertiesAllowed } from '../allow-extra-properties.decorator';
 import { isServerPopulated } from '../server-populated.decorator';
+import { getTypeErrorResponse } from '../type-error-response.decorator';
 import { assertValue } from '../assert-value';
 import type { AssertionContext } from '../assertion-context.interface';
 import type {
@@ -643,9 +644,10 @@ export function installFieldGuard(
   context: AssertionContext,
   options: FieldGuardOptions,
 ): void {
-  const fieldContext: AssertionContext = isServerPopulated(instance)
+  const ownerContext: AssertionContext = isServerPopulated(instance)
     ? { ...context, isServerPopulated: true }
     : context;
+  const fieldContext = withTypeErrorResponse(ownerContext, instance, key);
   const contract: GuardContract = {
     schema,
     context: fieldContext,
@@ -1005,7 +1007,11 @@ function installObjectProtection(
 
   for (const key of declaredKeys) {
     const property = schema.properties[key];
-    const propertyContext = nestedContext(ownerContext, key);
+    const propertyContext = withTypeErrorResponse(
+      nestedContext(ownerContext, key),
+      value,
+      key,
+    );
     const installedGuard = getInstalledGuard(value, key);
     if (installedGuard !== undefined) {
       addContractAndProtect(
@@ -1303,7 +1309,9 @@ function contractsMatch(
     left.context.functionName === right.context.functionName &&
     left.context.registry === right.context.registry &&
     left.context.allowExtraPropertiesAll === right.context.allowExtraPropertiesAll &&
-    left.context.isServerPopulated === right.context.isServerPopulated
+    left.context.isServerPopulated === right.context.isServerPopulated &&
+    left.context.typeErrorResponseMessage === right.context.typeErrorResponseMessage &&
+    left.context.typeErrorResponseStatus === right.context.typeErrorResponseStatus
   );
 }
 
@@ -1427,6 +1435,25 @@ function resolveReference(
   }
 
   return current;
+}
+
+function withTypeErrorResponse(
+  context: AssertionContext,
+  owner: object,
+  key: PropertyKey,
+): AssertionContext {
+  // Response fields are per-property: drop any inherited from an enclosing
+  // property so a decorated parent does not customize its nested children.
+  const { typeErrorResponseMessage: _inheritedMessage, typeErrorResponseStatus: _inheritedStatus, ...inherited } = context;
+  const response = getTypeErrorResponse(owner, decoratorPropertyKey(key));
+  if (response === undefined) {
+    return inherited;
+  }
+  return {
+    ...inherited,
+    typeErrorResponseMessage: response.message,
+    ...(response.status === undefined ? {} : { typeErrorResponseStatus: response.status }),
+  };
 }
 
 function nestedContext(

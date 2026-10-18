@@ -518,6 +518,12 @@ function fail(
     ...(context.className === undefined ? {} : { className: context.className }),
     ...(context.functionName === undefined ? {} : { functionName: context.functionName }),
     ...(context.isServerPopulated === true ? { isServerPopulated: true } : {}),
+    ...(context.typeErrorResponseMessage === undefined
+      ? {}
+      : { typeErrorResponseMessage: context.typeErrorResponseMessage }),
+    ...(context.typeErrorResponseStatus === undefined
+      ? {}
+      : { typeErrorResponseStatus: context.typeErrorResponseStatus }),
     contractKind: context.contractKind,
     propertyPath: path,
     expected,
