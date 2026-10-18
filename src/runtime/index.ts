@@ -33,3 +33,5 @@ export { assertValue } from './assert-value';
 export type { AssertionContext } from './assertion-context.interface';
 export { protectValue, installFieldGuard, lockReadonlyField, lockRequiredField } from './guards';
 export type { FieldGuardOptions } from './guards';
+export { ValueObject } from './value-object.class';
+export type { ValueObjectErrorContext } from './value-object.class';

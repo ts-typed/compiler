@@ -4,6 +4,14 @@ All notable changes to `@ts-typed/compiler` are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.1.19] - 2026-10-18
+
+### Added
+
+- A new abstract `ValueObject` base class (extends the boxed `String` object) for "value object" types that behave like a string — `console.log`, template literals, string concatenation, and `JSON.stringify` all show the raw value — while carrying custom validation and custom methods. A subclass implements `protected isValid(raw: string): boolean`; the constructor calls it after `super(raw)` and throws `StrictTypeError` (`contractKind: 'construction'`) when it returns `false`. Subclasses inherit every `String.prototype` method for free (`.toUpperCase()`, `.trim()`, `.includes()`, …) and add their own on top (e.g. `.masked()`, `.numbers()` for a document-formatting value object). This is step 1 of 2 for a new feature: today a `ValueObject` subclass must be constructed explicitly (`new CPF(raw)`); a follow-up release teaches the compiler to construct one automatically when a raw string crosses a typed boundary declared as that class, so an application never has to call `new CPF(...)` by hand.
+
+  **Trade-offs inherent to JavaScript, not fixable**: `typeof instance` is `'object'`, not `'string'` (a primitive can never carry extra methods); strict equality against a primitive string fails (`instance === 'abc'` is `false` — compare with `instance.toString()` or `String(instance)` instead).
+
 ## [0.1.18] - 2026-10-18
 
 ### Documentation
