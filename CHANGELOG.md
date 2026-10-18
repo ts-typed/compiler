@@ -4,6 +4,14 @@ All notable changes to `@ts-typed/compiler` are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.1.10] - 2026-10-18
+
+### Added
+
+- `compiler.enforceMutationGuards` now also covers plain objects/interfaces, closing `SEALED_OBJECTS` and the plain-object half of `REFLECTIVE_MUTATION` (the class-instance half was already fixed in an earlier release via non-configurable fields). A plain object crossing a typed boundary (not a class instance — identified by its prototype being `Object.prototype` or `null`, so class instances keep their identity and private-field semantics untouched) is wrapped in a `Proxy` with three traps: `set` validates a declared property's new value before the write goes through (this is what finally protects an `Object.seal()`-ed object, whose properties stay writable-but-non-configurable — the existing per-property accessor guards can't be installed on a non-configurable property via `defineProperty`, so this was previously silently unprotected); `deleteProperty` refuses to remove a REQUIRED declared property; `defineProperty` refuses a declared property whose new `value` fails its schema. All three refusals use native semantics (returning `false`) rather than throwing `StrictTypeError` directly, matching the convention already established for class instances' non-configurable required fields — the engine itself then produces the native effect (`delete` throws in strict code, `Object.defineProperty` throws a plain `TypeError`). `Object.freeze`d objects needed no new work: freezing already makes properties non-writable, so the JS engine itself rejects a bad write with no help from ts-typed.
+
+  Like the array/Map/Set cases, this is additive to `enforceMutationGuards` (no new flag) and off by default. Undeclared keys are forwarded untouched, consistent with the existing `allowExtraProperties`/`allowExtraPropertiesAll` boundary-crossing behavior, which this does not change.
+
 ## [0.1.9] - 2026-10-18
 
 ### Added

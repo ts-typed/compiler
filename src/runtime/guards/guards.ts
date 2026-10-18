@@ -81,6 +81,9 @@ export function protectValue(
     if (value instanceof Set) {
       return guardSetMutations(prepared.schema, value, prepared.context);
     }
+    if (typeof value === 'object' && value !== null) {
+      return guardObjectMutations(prepared.schema, value, prepared.context);
+    }
   }
   return value;
 }
@@ -298,6 +301,103 @@ function rememberCollectionMutationProxy(
   entries.push({ schema, context, proxy });
   collectionMutationEntries.set(collection, entries);
   mutationGuardProxies.add(proxy);
+}
+
+/**
+ * Plain-object counterpart of `guardArrayMutations`, for an object or interface
+ * that crosses a typed boundary. The per-property accessors installed by
+ * `installObjectProtection` cannot cover every write: on a sealed object the
+ * properties are non-configurable, so the accessors are never installed and
+ * the plain data properties stay writable; and a required key can be deleted
+ * or redefined because the accessors are configurable. This Proxy closes
+ * those paths with three traps:
+ * - `set` validates a declared property's new value before the write;
+ * - `deleteProperty` refuses to remove a required declared property;
+ * - `defineProperty` refuses a declared property whose new `value` fails its schema.
+ * A refusal returns `false` instead of throwing `StrictTypeError`, so the
+ * engine itself produces the native error (a `delete` in strict code, or a
+ * `TypeError` from `Object.defineProperty`), matching class instances.
+ * Undeclared keys (extra properties and index signatures) are forwarded
+ * untouched. Only objects whose prototype is `Object.prototype` or `null` are
+ * wrapped, so class instances keep their identity and private-field semantics.
+ */
+function guardObjectMutations(
+  schema: Schema,
+  object: object,
+  context: AssertionContext,
+): object {
+  if (mutationGuardProxies.has(object)) {
+    return object;
+  }
+  const resolved = resolveReference(schema, context);
+  if (resolved.kind !== 'object') {
+    return object;
+  }
+  const prototype = Object.getPrototypeOf(object) as object | null;
+  if (prototype !== Object.prototype && prototype !== null) {
+    return object;
+  }
+  const existing = findCollectionMutationProxy(object, resolved, context);
+  if (existing !== undefined) {
+    return existing;
+  }
+
+  const properties = resolved.properties;
+  const declaredProperty = (property: string | symbol): ObjectPropertySchema | undefined =>
+    Object.prototype.hasOwnProperty.call(properties, property) ? properties[property] : undefined;
+  const propertyMutationContext = (property: string | symbol): AssertionContext => ({
+    ...nestedContext(context, property),
+    operation: 'mutate',
+  });
+
+  const proxy: object = new Proxy(object, {
+    set(target, property: string | symbol, nextValue: unknown): boolean {
+      const declared = declaredProperty(property);
+      if (declared !== undefined) {
+        const propertyContext = propertyMutationContext(property);
+        assertValue(declared.schema, nextValue, propertyContext);
+        installProtection(declared.schema, nextValue, propertyContext, createProtectionState());
+      }
+      return Reflect.set(target, property, nextValue, target);
+    },
+    deleteProperty(target, property: string | symbol): boolean {
+      const declared = declaredProperty(property);
+      if (declared !== undefined && declared.optional !== true) {
+        return false;
+      }
+      return Reflect.deleteProperty(target, property);
+    },
+    defineProperty(target, property: string | symbol, descriptor: PropertyDescriptor): boolean {
+      const declared = declaredProperty(property);
+      if (declared !== undefined && 'value' in descriptor) {
+        const propertyContext = propertyMutationContext(property);
+        if (!isValidValue(declared.schema, descriptor.value, propertyContext)) {
+          return false;
+        }
+        installProtection(declared.schema, descriptor.value, propertyContext, createProtectionState());
+      }
+      return Reflect.defineProperty(target, property, descriptor);
+    },
+  });
+
+  rememberCollectionMutationProxy(object, resolved, context, proxy);
+  return proxy;
+}
+
+/**
+ * Non-throwing form of `assertValue`: reports a `StrictTypeError` mismatch as
+ * `false` and rethrows anything else.
+ */
+function isValidValue(schema: Schema, value: unknown, context: AssertionContext): boolean {
+  try {
+    assertValue(schema, value, context);
+    return true;
+  } catch (error) {
+    if (error instanceof StrictTypeError) {
+      return false;
+    }
+    throw error;
+  }
 }
 
 export function installFieldGuard(

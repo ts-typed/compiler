@@ -408,3 +408,157 @@ test('protectValue wraps Map and Set only when enforceMutationGuards is set, and
   assert.throws(() => setProxy.add('wrong'), runtime.StrictTypeError);
   assert.equal(rawSet.has('wrong'), false);
 });
+
+/**
+ * Builds a snippet that crosses a `Profile` interface boundary. `required`
+ * keys are `name` and `age`; `nickname` is optional. `valueExpression` is the
+ * runtime value handed to the boundary, and `body` runs against `profile`.
+ */
+function profileSnippet(valueExpression, body) {
+  return [
+    'interface Profile { name: string; age: number; nickname?: string; }',
+    `const value: any = ${valueExpression};`,
+    'const profile: Profile = value;',
+    body,
+  ].join('\n');
+}
+
+const plainProfile = '{ name: "Ada", age: 36, nickname: "A" }';
+const sealedProfile = 'Object.seal({ name: "Ada", age: 36 })';
+
+test('compiler.enforceMutationGuards defaults off: a wrong-typed write to a sealed object still succeeds', () => {
+  const body = profileSnippet(sealedProfile, [
+    'const loose: any = profile;',
+    'if (Reflect.set(profile, "age", "wrong") !== true) throw new Error("sealed write was rejected");',
+    'if (loose.age !== "wrong") throw new Error("sealed write was not applied");',
+    'process.stdout.write("OK");',
+  ].join('\n'));
+
+  assert.equal(runSnippet(body), 'OK');
+  assert.equal(runSnippet(body, { enforceMutationGuards: false }), 'OK');
+});
+
+test('compiler.enforceMutationGuards rejects a wrong-typed write to a sealed object and leaves the value unchanged', () => {
+  const stdout = runSnippet(
+    profileSnippet(sealedProfile, [
+      'const loose: any = profile;',
+      'let caught: any;',
+      'try { Reflect.set(profile, "age", "wrong"); } catch (error) { caught = error; }',
+      'if (caught === undefined) throw new Error("sealed wrong write was accepted");',
+      'if (caught.name !== "StrictTypeError") throw new Error("expected StrictTypeError, got " + caught.name);',
+      'if (caught.operation !== "mutate") throw new Error("unexpected operation " + caught.operation);',
+      'if (loose.age !== 36) throw new Error("sealed value changed");',
+      'process.stdout.write("OK");',
+    ].join('\n')),
+    { enforceMutationGuards: true },
+  );
+  assert.equal(stdout, 'OK');
+});
+
+test('compiler.enforceMutationGuards still allows a valid write to a sealed object', () => {
+  const stdout = runSnippet(
+    profileSnippet(sealedProfile, [
+      'const loose: any = profile;',
+      'Reflect.set(profile, "age", 37);',
+      'if (loose.age !== 37) throw new Error("valid sealed write failed");',
+      'profile.name = "Grace";',
+      'if (profile.name !== "Grace") throw new Error("valid direct sealed write failed");',
+      'process.stdout.write("OK");',
+    ].join('\n')),
+    { enforceMutationGuards: true },
+  );
+  assert.equal(stdout, 'OK');
+});
+
+test('compiler.enforceMutationGuards refuses to delete a required key from a plain object without throwing', () => {
+  const stdout = runSnippet(
+    profileSnippet(plainProfile, [
+      'const loose: any = profile;',
+      'if (Reflect.deleteProperty(profile, "age") !== false) throw new Error("required delete was not refused");',
+      'if (loose.age !== 36) throw new Error("required key was removed");',
+      'let strictDelete = "none";',
+      'try { delete (profile as any).age; } catch (error) { strictDelete = (error as any).name; }',
+      'if (strictDelete !== "TypeError") throw new Error("strict delete did not throw TypeError: " + strictDelete);',
+      'if (Reflect.deleteProperty(profile, "nickname") !== true || loose.nickname !== undefined) throw new Error("optional delete failed");',
+      'process.stdout.write("OK");',
+    ].join('\n')),
+    { enforceMutationGuards: true },
+  );
+  assert.equal(stdout, 'OK');
+});
+
+test('compiler.enforceMutationGuards refuses a wrong-typed defineProperty with a native TypeError and keeps the value', () => {
+  const stdout = runSnippet(
+    profileSnippet(plainProfile, [
+      'const loose: any = profile;',
+      'let caught: any;',
+      'try { Object.defineProperty(profile, "age", { value: "wrong" }); } catch (error) { caught = error; }',
+      'if (caught === undefined) throw new Error("wrong defineProperty was accepted");',
+      'if (caught.name !== "TypeError") throw new Error("expected native TypeError, got " + caught.name);',
+      'if (loose.age !== 36) throw new Error("value changed after refused defineProperty");',
+      'Object.defineProperty(profile, "age", { value: 37 });',
+      'if (loose.age !== 37) throw new Error("valid defineProperty failed");',
+      'process.stdout.write("OK");',
+    ].join('\n')),
+    { enforceMutationGuards: true },
+  );
+  assert.equal(stdout, 'OK');
+});
+
+test('compiler.enforceMutationGuards keeps JSON.stringify, Object.keys, spread and reads working on the wrapped object', () => {
+  const stdout = runSnippet(
+    profileSnippet(plainProfile, [
+      'if (JSON.stringify(profile) !== JSON.stringify({ name: "Ada", age: 36, nickname: "A" })) throw new Error("JSON.stringify changed");',
+      'if (Object.keys(profile).join(",") !== "name,age,nickname") throw new Error("Object.keys changed");',
+      'const copy = { ...profile };',
+      'if (copy.name !== "Ada" || copy.age !== 36 || copy.nickname !== "A") throw new Error("spread changed");',
+      'if (profile.name !== "Ada" || profile.age !== 36) throw new Error("reads broke");',
+      'process.stdout.write("OK");',
+    ].join('\n')),
+    { enforceMutationGuards: true },
+  );
+  assert.equal(stdout, 'OK');
+});
+
+test('compiler.enforceMutationGuards leaves class instances unwrapped, so private members still work', () => {
+  const stdout = runSnippet(
+    [
+      'class Named { name = "Ada"; #secret = 7; reveal(): number { return this.#secret; } }',
+      'const instance = new Named();',
+      'const typed: Named = instance;',
+      'if (typed !== instance) throw new Error("class instance was wrapped");',
+      'if (typed.reveal() !== 7) throw new Error("private member access broke");',
+      'process.stdout.write("OK");',
+    ].join('\n'),
+    { enforceMutationGuards: true },
+  );
+  assert.equal(stdout, 'OK');
+});
+
+test('protectValue wraps plain objects only when enforceMutationGuards is set, and reuses the same proxy', () => {
+  const schema = {
+    kind: 'object',
+    properties: {
+      name: { schema: { kind: 'primitive', name: 'string' } },
+      age: { schema: { kind: 'primitive', name: 'number' } },
+      nickname: { schema: { kind: 'primitive', name: 'string' }, optional: true },
+    },
+  };
+  const baseContext = { contractKind: 'variable', propertyPath: 'profile', operation: 'set' };
+
+  const plain = { name: 'Ada', age: 36 };
+  assert.strictEqual(guards.protectValue(schema, plain, baseContext), plain);
+
+  const guardedContext = { ...baseContext, enforceMutationGuards: true };
+  const raw = { name: 'Ada', age: 36 };
+  const proxy = guards.protectValue(schema, raw, guardedContext);
+  assert.notStrictEqual(proxy, raw);
+  assert.strictEqual(guards.protectValue(schema, raw, guardedContext), proxy);
+  assert.strictEqual(guards.protectValue(schema, proxy, guardedContext), proxy);
+  assert.throws(() => Reflect.set(proxy, 'age', 'wrong'), runtime.StrictTypeError);
+  assert.equal(raw.age, 36);
+
+  class Holder { value = 1; }
+  const instance = new Holder();
+  assert.strictEqual(guards.protectValue({ kind: 'object', properties: {}, allowExtraProperties: true }, instance, guardedContext), instance);
+});
