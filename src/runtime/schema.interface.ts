@@ -55,6 +55,15 @@ export interface ObjectPropertySchema {
    * "trust me, it is assigned later" contract `!` makes with the compiler.
    */
   readonly deferredAssignment?: boolean;
+  /**
+   * The property is `readonly` in its declared interface/type-literal shape.
+   * A plain object/literal value has no "still under construction" phase
+   * (unlike a class field, there is no in-between state), so this is enforced
+   * as soon as the value crosses a typed boundary, not deferred to any later
+   * point. Only set for `PropertySignature` declarations; class fields keep
+   * going through `enforceReadonly`.
+   */
+  readonly readonly?: boolean;
 }
 
 export interface SchemaProperties {

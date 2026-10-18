@@ -4,6 +4,18 @@ All notable changes to `@ts-typed/compiler` are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.1.3] - 2026-10-17
+
+Continues the same fix/test/document loop against the real teste-ts-typed app.
+
+### Added
+
+- A `readonly` member of a plain object's interface or type-alias shape (as opposed to a class field, already covered by `compiler.enforceReadonly`) is now locked immediately when the value crosses a typed boundary: `interface Config { readonly version: string }` rejects a later `config.version = 'x'` with `READONLY_PROPERTY`. Unlike a class, a plain object/literal value has no "still under construction" phase, so there is no deferred-lock timing concern here — it is safe to enforce immediately. A `Readonly<T>` mapped type and `readonly` members of index signatures are not detected (documented limitation); class instances are deliberately left out of this specific lock (a `readonly` view of an instance must not freeze that instance's own mutable state).
+
+### Investigated and deliberately NOT shipped this release
+
+- Sealing a class instance with `Object.preventExtensions` right after construction (to reject undeclared/extra properties, `CLOSED_INSTANCES`/`SYMBOL_KEYS`) was implemented and tested in isolation, then reverted before publishing once it broke a real, common pattern found by re-running teste-ts-typed's full suite: NestJS's own `class-transformer` + `ValidationPipe({ whitelist: true, forbidNonWhitelisted: true })` combination copies every key from the request body onto the DTO instance first, and only strips the non-whitelisted ones afterward as a second step — sealing the instance makes that first copy throw a native, unguarded `TypeError` instead of ever reaching the whitelist step. A general fix would need a way to tell "this class is meant to be populated after construction, by design" apart from a genuinely closed instance, which is not something `contractKind`/`operation` alone can express.
+
 ## [0.1.2] - 2026-10-17
 
 A continuation of the same real-app fix/test/document loop that produced 0.1.1: closes three more coverage gaps (`static` fields, `Map`/`Set` adapters), and fixes a severe regression that 0.1.1 itself introduced.

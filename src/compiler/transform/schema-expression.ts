@@ -94,6 +94,9 @@ export function createSchemaExpression(
             ),
           );
         }
+        if (property.readonly === true) {
+          propertyMembers.push(factory.createPropertyAssignment('readonly', factory.createTrue()));
+        }
         schemaProperties.push(
           factory.createPropertyAssignment(
             createSchemaPropertyName(typescript, factory, key),

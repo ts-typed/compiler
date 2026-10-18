@@ -430,6 +430,7 @@ function installObjectProtection(
       addContractAndProtect(
         installedGuard,
         property.schema,
+        property.readonly === true,
         propertyContext,
         value,
         key,
@@ -447,6 +448,7 @@ function installObjectProtection(
       key,
       descriptor,
       property.schema,
+      property.readonly === true,
       propertyContext,
       state,
     );
@@ -466,6 +468,7 @@ function installObjectProtection(
       addContractAndProtect(
         installedGuard,
         schema.index,
+        false,
         propertyContext,
         value,
         key,
@@ -482,6 +485,7 @@ function installObjectProtection(
       key,
       descriptor,
       schema.index,
+      false,
       propertyContext,
       state,
     );
@@ -491,6 +495,7 @@ function installObjectProtection(
 function addContractAndProtect(
   installedGuard: DataPropertyGuardState,
   schema: Schema,
+  readonlyField: boolean,
   context: AssertionContext,
   owner: object,
   key: PropertyKey,
@@ -505,6 +510,9 @@ function addContractAndProtect(
     ),
   };
   addContract(installedGuard, contract);
+  if (readonlyField) {
+    lockStructuralReadonly(owner, key);
+  }
   const prepared = prepareContract(contract, installedGuard.value, context.operation);
   installProtection(prepared.schema, installedGuard.value, prepared.context, state);
 }
@@ -514,6 +522,7 @@ function installKnownDataProperty(
   key: PropertyKey,
   descriptor: PropertyDescriptor,
   schema: Schema,
+  readonlyField: boolean,
   context: AssertionContext,
   state: ProtectionState,
 ): void {
@@ -528,7 +537,26 @@ function installKnownDataProperty(
   const prepared = prepareContract(contract, descriptor.value, context.operation);
 
   installProtection(prepared.schema, descriptor.value, prepared.context, state);
-  installDataGuard(owner, key, descriptor.value, true, descriptor, contract, false);
+  installDataGuard(owner, key, descriptor.value, true, descriptor, contract, readonlyField);
+  if (readonlyField) {
+    lockStructuralReadonly(owner, key);
+  }
+}
+
+/**
+ * Locks a `readonly` member of an interface/type-literal shape. Only applied
+ * to plain object literals (prototype is `Object.prototype` or `null`): those
+ * are complete when they cross a typed boundary, so there is no construction
+ * phase to wait for. Class instances are skipped on purpose. Their own fields
+ * may still be written by their methods, and a readonly view typed by an
+ * interface must not freeze a class's mutable state.
+ */
+function lockStructuralReadonly(owner: object, key: PropertyKey): void {
+  const prototype = Object.getPrototypeOf(owner) as object | null;
+  if (prototype !== Object.prototype && prototype !== null) {
+    return;
+  }
+  lockReadonlyField(owner, key);
 }
 
 function installArrayItemProtection(

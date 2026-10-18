@@ -587,6 +587,7 @@ export class TypeSchemaResolver {
           ...(this._hasDefiniteAssignmentAssertion(property)
             ? { optional: true, deferredAssignment: true }
             : {}),
+          ...(this._isReadonlyPropertySignature(property) ? { readonly: true } : {}),
         },
       ]);
     }
@@ -617,6 +618,24 @@ export class TypeSchemaResolver {
         ? `${ALIAS_LIMIT_REASON} The single runtime index contract does not distinguish string and symbol keys.`
         : ALIAS_LIMIT_REASON,
     };
+  }
+
+  /**
+   * True only for a `readonly` member of an interface or type literal
+   * (`ts.PropertySignature`). Class fields are deliberately excluded: they are
+   * covered by `enforceReadonly`, which locks them after construction.
+   * Known limitation: a `readonly` introduced by a mapped type such as
+   * `Readonly<T>` is not detected, because the mapped symbol's value declaration
+   * is the original (mutable) member.
+   */
+  private _isReadonlyPropertySignature(property: ts.Symbol): boolean {
+    const declaration = property.valueDeclaration;
+    if (declaration === undefined || !this._typescript.isPropertySignature(declaration)) {
+      return false;
+    }
+    return (
+      (this._typescript.getCombinedModifierFlags(declaration) & this._typescript.ModifierFlags.Readonly) !== 0
+    );
   }
 
   /**
