@@ -17,6 +17,18 @@ interface FunctionVisitState {
   readonly yieldSchema?: Schema;
   readonly isAsync: boolean;
   readonly name: string;
+  /** Type predicate / assertion declared as the return type (`x is T`, `asserts x`, `asserts x is T`). */
+  readonly predicate?: TypePredicateCheck;
+}
+
+/**
+ * Runtime check for a type predicate (`x is T`) or assertion (`asserts x` / `asserts x is T`) on a
+ * named parameter. `schema` is `undefined` only for the truthiness form `asserts x`.
+ */
+interface TypePredicateCheck {
+  readonly isAssertion: boolean;
+  readonly parameterName: string;
+  readonly schema: Schema | undefined;
 }
 
 interface FieldGuard {
@@ -496,22 +508,31 @@ function visitReturnStatement(
   typescript: typeof import('typescript'),
   visitor: ts.Visitor,
   context: ts.TransformationContext,
-): ts.ReturnStatement {
+): ts.Statement {
   const expression = node.expression === undefined
     ? undefined
     : typescript.visitNode(node.expression, visitor, isExpression);
   const functionState = state.functionStack.at(-1);
-  if (expression === undefined || functionState?.schema === undefined || functionState.descriptor === undefined) {
-    return factory.updateReturnStatement(node, expression);
+  const predicate = functionState?.predicate;
+
+  // `return;` inside an assertion function is a normal exit: the asserted value must hold here too.
+  if (predicate?.isAssertion === true && expression === undefined && functionState !== undefined) {
+    return factory.createBlock(
+      [
+        createPredicateCheckStatement(factory, state, typescript, predicate, functionState.name),
+        factory.updateReturnStatement(node, undefined),
+      ],
+      false,
+    );
   }
 
-  const value = functionState.isAsync
-    ? factory.createAwaitExpression(expression)
-    : expression;
-  state.handledContracts.add(functionState.descriptor);
-  return factory.updateReturnStatement(
-    node,
-    createProtectCall(
+  let returned = expression;
+  if (expression !== undefined && functionState?.schema !== undefined && functionState.descriptor !== undefined) {
+    const value = functionState.isAsync
+      ? factory.createAwaitExpression(expression)
+      : expression;
+    state.handledContracts.add(functionState.descriptor);
+    returned = createProtectCall(
       factory,
       state,
       functionState.schema,
@@ -519,8 +540,12 @@ function visitReturnStatement(
       functionState.descriptor,
       functionState.isAsync ? 'resolve' : 'return',
       functionState.name,
-    ),
-  );
+    );
+  }
+  if (returned !== undefined && predicate?.isAssertion === false && functionState !== undefined) {
+    returned = createTypeGuardCall(factory, state, typescript, predicate, functionState.name, returned);
+  }
+  return factory.updateReturnStatement(node, returned);
 }
 
 function visitYieldExpression(
@@ -577,6 +602,7 @@ function visitFunctionLike(
   const functionName = getFunctionName(typescript, node);
   const returnSchema = getReturnSchema(node, descriptor, isAsync, checker, state, typescript);
   const yieldSchema = getYieldSchema(node, descriptor, state, checker, typescript);
+  const predicate = getTypePredicateCheck(node, state, checker, typescript);
   const functionState: FunctionVisitState = {
     declaration: node,
     descriptor,
@@ -584,6 +610,7 @@ function visitFunctionLike(
     yieldSchema,
     isAsync,
     name: functionName,
+    predicate,
   };
   state.functionStack.push(functionState);
   const parameters = node.parameters.map((parameter) =>
@@ -593,8 +620,17 @@ function visitFunctionLike(
   state.functionStack.pop();
 
   const parameterGuards = createParameterGuards(parameters, node.parameters, state, factory, typescript);
+  if (predicate?.isAssertion === true && !typescript.isBlock(body)) {
+    // An expression-bodied assertion still "returns" normally: run the expression, then check.
+    body = factory.createBlock([factory.createExpressionStatement(body as ts.Expression)], true);
+  }
   if (typescript.isBlock(body)) {
-    body = factory.updateBlock(body, [...parameterGuards, ...body.statements]);
+    // Falling off the end of an assertion function is also a normal return, so the check
+    // goes last; if an earlier `return;` already exited, this statement is never reached.
+    const endChecks = predicate?.isAssertion === true
+      ? [createPredicateCheckStatement(factory, state, typescript, predicate, functionName)]
+      : [];
+    body = factory.updateBlock(body, [...parameterGuards, ...body.statements, ...endChecks]);
   } else {
     if (returnSchema !== undefined && descriptor !== undefined) {
       const value = isAsync ? factory.createAwaitExpression(body) : body;
@@ -608,6 +644,9 @@ function visitFunctionLike(
         functionName,
       );
       state.handledContracts.add(descriptor);
+    }
+    if (predicate?.isAssertion === false) {
+      body = createTypeGuardCall(factory, state, typescript, predicate, functionName, body as ts.Expression);
     }
     if (parameterGuards.length > 0) {
       body = factory.createBlock(
@@ -660,6 +699,128 @@ function createParameterGuards(
     );
   }
   return statements;
+}
+
+/**
+ * Reads the type predicate or assertion declared as a function's return type. Returns `undefined`
+ * when there is none, and also when it is left unchecked on purpose: predicates on `this` are out of
+ * scope, and an asserted type with no materializable schema cannot be checked at runtime.
+ */
+function getTypePredicateCheck(
+  node: ts.FunctionLikeDeclaration,
+  state: FileTransformState,
+  checker: ts.TypeChecker,
+  typescript: typeof import('typescript'),
+): TypePredicateCheck | undefined {
+  const predicateNode = node.type;
+  if (predicateNode === undefined || !typescript.isTypePredicateNode(predicateNode)) {
+    return undefined;
+  }
+  if (!typescript.isIdentifier(predicateNode.parameterName)) {
+    return undefined;
+  }
+  const parameterName = predicateNode.parameterName.text;
+  const isAssertion = predicateNode.assertsModifier !== undefined;
+  const targetExists = node.parameters.some((parameter) =>
+    typescript.isIdentifier(parameter.name) &&
+    parameter.name.text === parameterName &&
+    !isThisParameter(typescript, parameter),
+  );
+  if (!targetExists) {
+    return undefined;
+  }
+  if (predicateNode.type === undefined) {
+    return isAssertion ? { isAssertion, parameterName, schema: undefined } : undefined;
+  }
+  const resolution = optionsForState(state).analysis.resolver.resolve(
+    checker.getTypeFromTypeNode(predicateNode.type),
+    node,
+  );
+  if (resolution.schema === undefined) {
+    return undefined;
+  }
+  return { isAssertion, parameterName, schema: resolution.schema };
+}
+
+/**
+ * The check that runs when a predicate or assertion claims its parameter holds. Typed forms go
+ * through `protectValue`; the bare `asserts x` form is a plain truthiness test. Only `typeof` of the
+ * value is reported, matching the runtime's own error messages.
+ */
+function createPredicateCheckStatement(
+  factory: ts.NodeFactory,
+  state: FileTransformState,
+  typescript: typeof import('typescript'),
+  predicate: TypePredicateCheck,
+  functionName: string,
+): ts.Statement {
+  const parameter = factory.createIdentifier(predicate.parameterName);
+  if (predicate.schema !== undefined) {
+    return factory.createExpressionStatement(
+      createProtectCall(
+        factory,
+        state,
+        predicate.schema,
+        parameter,
+        { kind: 'parameter', name: predicate.parameterName },
+        'assert',
+        functionName,
+      ),
+    );
+  }
+  const members: ts.ObjectLiteralElementLike[] = [
+    factory.createPropertyAssignment('code', factory.createStringLiteral('TYPE_MISMATCH')),
+    factory.createPropertyAssignment('contractKind', factory.createStringLiteral('parameter')),
+    factory.createPropertyAssignment('propertyPath', factory.createStringLiteral(predicate.parameterName)),
+    factory.createPropertyAssignment('expected', factory.createStringLiteral('truthy value')),
+    factory.createPropertyAssignment(
+      'received',
+      factory.createTypeOfExpression(factory.createIdentifier(predicate.parameterName)),
+    ),
+    factory.createPropertyAssignment('operation', factory.createStringLiteral('assert')),
+    factory.createPropertyAssignment('functionName', factory.createStringLiteral(functionName)),
+  ];
+  return factory.createIfStatement(
+    factory.createPrefixUnaryExpression(
+      typescript.SyntaxKind.ExclamationToken,
+      parameter,
+    ),
+    factory.createThrowStatement(
+      factory.createNewExpression(
+        factory.createPropertyAccessExpression(state.runtimeIdentifier, 'StrictTypeError'),
+        undefined,
+        [factory.createObjectLiteralExpression(members)],
+      ),
+    ),
+  );
+}
+
+/**
+ * Wraps a type guard's returned value in an IIFE: when the guard says `true`, the claimed parameter
+ * is checked before the result is handed back. The IIFE evaluates the original expression exactly once.
+ */
+function createTypeGuardCall(
+  factory: ts.NodeFactory,
+  state: FileTransformState,
+  typescript: typeof import('typescript'),
+  predicate: TypePredicateCheck,
+  functionName: string,
+  value: ts.Expression,
+): ts.Expression {
+  const resultName = factory.createUniqueName('guardResult');
+  const verify = factory.createIfStatement(
+    resultName,
+    factory.createBlock([createPredicateCheckStatement(factory, state, typescript, predicate, functionName)], true),
+  );
+  const verifier = factory.createArrowFunction(
+    undefined,
+    undefined,
+    [factory.createParameterDeclaration(undefined, undefined, resultName)],
+    undefined,
+    factory.createToken(typescript.SyntaxKind.EqualsGreaterThanToken),
+    factory.createBlock([verify, factory.createReturnStatement(resultName)], true),
+  );
+  return factory.createCallExpression(factory.createParenthesizedExpression(verifier), undefined, [value]);
 }
 
 function visitClassDeclaration(

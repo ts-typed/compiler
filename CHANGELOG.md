@@ -4,6 +4,12 @@ All notable changes to `@ts-typed/compiler` are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.1.5] - 2026-10-17
+
+### Added
+
+- A user-defined type guard (`function isProfile(x: unknown): x is Profile`) now validates its target parameter against the asserted type whenever it returns `true` — returning `true` is the claim being made, so it is checked then; returning `false` makes no claim, so nothing is checked in that path. An assertion function (`asserts x is T` / `asserts x`) validates its target at every normal return path (an explicit `return` and falling off the end of the function), since returning normally at all is exactly the claim an assertion function makes; throwing is unaffected. Both are resolved directly by the type resolver at transform time, the same pattern already used for destructuring (0.1.4), async returns and generator yields. A predicate/assertion on `this` (`this is T`, `asserts this`) is not checked (documented limitation, consistent with class instances being excluded from the readonly-structural lock added in 0.1.3).
+
 ## [0.1.4] - 2026-10-17
 
 ### Added
