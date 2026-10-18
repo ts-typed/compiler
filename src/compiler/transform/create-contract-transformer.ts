@@ -2388,8 +2388,9 @@ function visitNewExpression(
  * Mirrors `guardExplicitGenericCall` for constructors: each constructor argument whose instantiated
  * parameter type is protectable is checked as an argument, and the constructed instance is checked
  * against the instantiated instance type. Constructors are always synchronous, so there is no async
- * branch. Inferred type arguments (`new Box(x)`) are not handled. Rest parameters and spread
- * arguments are not validated.
+ * branch. Inferred type arguments (`new Box(x)`) are not handled. A rest parameter checks each argument
+ * landing in it against the element type; a spread landing in it is checked as an array of that type,
+ * and a spread before the rest parameter stops the check (its length is unknown).
  */
 function guardExplicitGenericConstruct(
   node: ts.NewExpression,
@@ -2414,19 +2415,54 @@ function guardExplicitGenericConstruct(
   }
 
   const parameterSymbols = signature.getParameters();
-  const parameterDeclarations: readonly ts.ParameterDeclaration[] = typescript.isClassLike(declaration)
-    ? []
-    : declaration.parameters;
   // `new Box<Person>` without parentheses has no argument list.
   const sourceArguments = visited.arguments ?? [];
   const args = [...sourceArguments];
+  // A declared rest parameter (`...items: T[]`) absorbs every argument from its index onward.
+  const restIndex = parameterSymbols.findIndex((symbol) => {
+    const declaration = symbol.valueDeclaration;
+    return declaration !== undefined && typescript.isParameter(declaration) && declaration.dotDotDotToken !== undefined;
+  });
+  const restSymbol = restIndex === -1 ? undefined : parameterSymbols[restIndex];
+  const restLabel = restSymbol === undefined
+    ? undefined
+    : { kind: 'parameter', name: restSymbol.getName() };
+  const restType = restSymbol === undefined ? undefined : checker.getTypeOfSymbolAtLocation(restSymbol, node);
+  const restElementType = restType !== undefined && checker.isArrayType(restType)
+    ? getTypeArgumentAt(checker, typescript, restType, 0)
+    : undefined;
+  // Element schema checks each plain argument in the rest; the array schema checks a spread landing there.
+  const restElementSchema = restElementType === undefined
+    ? undefined
+    : resolveProtectedCallSchema(restElementType, node, state, typescript);
+  const restArraySchema: Schema | undefined = restElementSchema === undefined
+    ? undefined
+    : { kind: 'array', items: restElementSchema };
+  const loopEnd = restIndex === -1 ? Math.min(args.length, parameterSymbols.length) : args.length;
   let guardedArguments = false;
-  for (let index = 0; index < args.length && index < parameterSymbols.length; index += 1) {
+  for (let index = 0; index < loopEnd; index += 1) {
+    const inRest = restIndex !== -1 && index >= restIndex;
     if (typescript.isSpreadElement(sourceArguments[index])) {
-      break;
+      // A spread before the rest parameter has an unknown length, so later positions are unknowable.
+      if (!inRest) {
+        break;
+      }
+      const spread = sourceArguments[index] as ts.SpreadElement;
+      if (restArraySchema !== undefined && restLabel !== undefined) {
+        args[index] = factory.updateSpreadElement(
+          spread,
+          createProtectCall(factory, state, restArraySchema, spread.expression, restLabel, 'argument'),
+        );
+        guardedArguments = true;
+      }
+      continue;
     }
-    if (parameterDeclarations[index]?.dotDotDotToken !== undefined) {
-      break;
+    if (inRest) {
+      if (restElementSchema !== undefined && restLabel !== undefined) {
+        args[index] = createProtectCall(factory, state, restElementSchema, args[index], restLabel, 'argument');
+        guardedArguments = true;
+      }
+      continue;
     }
     const parameterType = checker.getTypeOfSymbolAtLocation(parameterSymbols[index], node);
     const schema = resolveProtectedCallSchema(parameterType, node, state, typescript);
@@ -2498,7 +2534,8 @@ function rewriteRuntimeRequire(
  * the concrete signature is taken from the checker at this call site instead: each argument whose
  * instantiated parameter type is protectable is checked as an argument, and the whole call is
  * checked against the instantiated return type. Inferred type arguments (`identity(x)`) are not
- * handled. Rest parameters and spread arguments are not validated.
+ * handled. A rest parameter checks each argument landing in it against the element type; a spread landing in
+ * it is checked as an array of that type, and a spread before the rest parameter stops the check.
  */
 function guardExplicitGenericCall(
   node: ts.CallExpression,
@@ -2518,15 +2555,52 @@ function guardExplicitGenericCall(
   }
 
   const parameterSymbols = signature.getParameters();
-  const parameterDeclarations = declaration.parameters;
   const args = [...visited.arguments];
+  // A declared rest parameter (`...items: T[]`) absorbs every argument from its index onward.
+  const restIndex = parameterSymbols.findIndex((symbol) => {
+    const parameter = symbol.valueDeclaration;
+    return parameter !== undefined && typescript.isParameter(parameter) && parameter.dotDotDotToken !== undefined;
+  });
+  const restSymbol = restIndex === -1 ? undefined : parameterSymbols[restIndex];
+  const restLabel = restSymbol === undefined
+    ? undefined
+    : { kind: 'parameter', name: restSymbol.getName() };
+  const restType = restSymbol === undefined ? undefined : checker.getTypeOfSymbolAtLocation(restSymbol, node);
+  const restElementType = restType !== undefined && checker.isArrayType(restType)
+    ? getTypeArgumentAt(checker, typescript, restType, 0)
+    : undefined;
+  // Element schema checks each plain argument in the rest; the array schema checks a spread landing there.
+  const restElementSchema = restElementType === undefined
+    ? undefined
+    : resolveProtectedCallSchema(restElementType, node, state, typescript);
+  const restArraySchema: Schema | undefined = restElementSchema === undefined
+    ? undefined
+    : { kind: 'array', items: restElementSchema };
+  const loopEnd = restIndex === -1 ? Math.min(args.length, parameterSymbols.length) : args.length;
   let guardedArguments = false;
-  for (let index = 0; index < args.length && index < parameterSymbols.length; index += 1) {
+  for (let index = 0; index < loopEnd; index += 1) {
+    const inRest = restIndex !== -1 && index >= restIndex;
     if (typescript.isSpreadElement(visited.arguments[index])) {
-      break;
+      // A spread before the rest parameter has an unknown length, so later positions are unknowable.
+      if (!inRest) {
+        break;
+      }
+      const spread = visited.arguments[index] as ts.SpreadElement;
+      if (restArraySchema !== undefined && restLabel !== undefined) {
+        args[index] = factory.updateSpreadElement(
+          spread,
+          createProtectCall(factory, state, restArraySchema, spread.expression, restLabel, 'argument'),
+        );
+        guardedArguments = true;
+      }
+      continue;
     }
-    if (parameterDeclarations[index]?.dotDotDotToken !== undefined) {
-      break;
+    if (inRest) {
+      if (restElementSchema !== undefined && restLabel !== undefined) {
+        args[index] = createProtectCall(factory, state, restElementSchema, args[index], restLabel, 'argument');
+        guardedArguments = true;
+      }
+      continue;
     }
     const parameterType = checker.getTypeOfSymbolAtLocation(parameterSymbols[index], node);
     const schema = resolveProtectedCallSchema(parameterType, node, state, typescript);

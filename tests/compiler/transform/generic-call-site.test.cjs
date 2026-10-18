@@ -293,3 +293,78 @@ test('an ordinary non-generic class construction is unaffected', () => {
   ]);
   assert.deepEqual(results, ['ok:plain-new']);
 });
+
+test('explicit collect<number> validates plain arguments landing in the rest parameter', () => {
+  const results = runScenario([
+    'let ran = false;',
+    'function collect<T>(...items: T[]): T[] { ran = true; return items; }',
+    'record("rest-plain", () => { collect<number>(1, 2, "bad" as any); });',
+    'results.push(`ran:${ran}`);',
+  ]);
+  assert.deepEqual(results, ['strict:rest-plain:parameter:argument', 'ran:false']);
+});
+
+test('explicit collect<number> accepts valid plain rest arguments and returns them', () => {
+  const results = runScenario([
+    'function collect<T>(...items: T[]): T[] { return items; }',
+    'results.push(collect<number>(1, 2, 3).join("|"));',
+  ]);
+  assert.deepEqual(results, ['1|2|3']);
+});
+
+test('a call without explicit type arguments does not validate rest arguments at the call site', () => {
+  const results = runScenario([
+    'function collect<T>(...items: T[]): T[] { return items; }',
+    'record("rest-inferred", () => { collect(1, 2, "bad" as any); });',
+  ]);
+  assert.deepEqual(results, ['ok:rest-inferred']);
+});
+
+test('explicit collect<number> validates a spread array landing in the rest parameter', () => {
+  const results = runScenario([
+    'let ran = false;',
+    'function collect<T>(...items: T[]): T[] { ran = true; return items; }',
+    'const mixed: any[] = [1, 2, "bad"];',
+    'const good: number[] = [1, 2, 3];',
+    'record("rest-spread-bad", () => { collect<number>(...mixed); });',
+    'results.push(`ran:${ran}`);',
+    'results.push(collect<number>(...good).join("|"));',
+  ]);
+  assert.deepEqual(results, ['strict:rest-spread-bad:parameter:argument', 'ran:false', '1|2|3']);
+});
+
+test('explicit collect<number> checks a plain argument after a spread that lands in the rest parameter', () => {
+  const results = runScenario([
+    'function collect<T>(...items: T[]): T[] { return items; }',
+    'const good: number[] = [1, 2];',
+    'record("rest-spread-then-bad", () => { collect<number>(...good, "bad" as any); });',
+  ]);
+  assert.deepEqual(results, ['strict:rest-spread-then-bad:parameter:argument']);
+});
+
+test('explicit new Collector<number> validates plain constructor rest arguments', () => {
+  const results = runScenario([
+    'let ran = false;',
+    'class Collector<T> { public readonly items: readonly T[]; public constructor(...items: T[]) { ran = true; this.items = items; } }',
+    'record("ctor-rest-plain", () => { new Collector<number>(1, 2, "bad" as any); });',
+    'results.push(`ran:${ran}`);',
+  ]);
+  assert.deepEqual(results, ['strict:ctor-rest-plain:parameter:argument', 'ran:false']);
+});
+
+test('explicit new Collector<number> accepts valid constructor rest arguments', () => {
+  const results = runScenario([
+    'class Collector<T> { public readonly items: readonly T[]; public constructor(...items: T[]) { this.items = items; } }',
+    'results.push(new Collector<number>(1, 2, 3).items.join("|"));',
+  ]);
+  assert.deepEqual(results, ['1|2|3']);
+});
+
+test('explicit new Collector<number> validates a spread array landing in the constructor rest parameter', () => {
+  const results = runScenario([
+    'class Collector<T> { public readonly items: readonly T[]; public constructor(...items: T[]) { this.items = items; } }',
+    'const mixed: any[] = [1, "bad"];',
+    'record("ctor-rest-spread-bad", () => { new Collector<number>(...mixed); });',
+  ]);
+  assert.deepEqual(results, ['strict:ctor-rest-spread-bad:parameter:argument']);
+});

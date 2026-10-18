@@ -4,6 +4,12 @@ All notable changes to `@ts-typed/compiler` are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.1.16] - 2026-10-18
+
+### Added
+
+- `GENERIC_TRANSPORT`'s call-site validation now also covers rest parameters and spread arguments, for both explicit-generic calls and `new` expressions. `function collect<T>(...items: T[]): T[]` called as `collect<number>(1, 2, 'bad')` now validates each plain argument landing in the rest parameter individually against its element type (catching `'bad'` specifically). A spread argument landing in the rest parameter (`collect<number>(...mixed)`) is validated as a whole array against an array schema built from the rest element's type. A spread BEFORE the rest parameter (`f<T>(a: T, ...rest: T[])` called as `f(...arr, x)`) still stops the check at that point, since its length can't be known at transform time.
+
 ## [0.1.15] - 2026-10-18
 
 ### Added
