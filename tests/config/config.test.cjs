@@ -335,6 +335,7 @@ test('schema keys and defaults match the documented generated configuration', ()
       strictClass: false,
       enforcePrivate: true,
       enforceReadonly: true,
+      enforceClosedInstances: false,
     },
     ncc: {
       enabled: true,
@@ -423,4 +424,18 @@ test('initializes once with an absolute root, explicit script suggestions and ma
     'build:debug: ts-typed build --no-bundle --sourcemap',
     'start:prod: node dist/index.js',
   ]);
+});
+
+test('enforceClosedInstances defaults to false, accepts a true override, and rejects non-boolean values', async (t) => {
+  const directory = createTemporaryDirectory(t);
+  const projectFile = writeJson(directory, 'typets.config.json', {});
+
+  const defaults = await loadConfig(projectFile);
+  assert.equal(defaults.compiler.enforceClosedInstances, false);
+
+  const overridden = await loadConfig(projectFile, { compiler: { enforceClosedInstances: true } });
+  assert.equal(overridden.compiler.enforceClosedInstances, true);
+
+  const invalidFile = writeJson(directory, 'invalid.json', { compiler: { enforceClosedInstances: 'yes' } });
+  await assert.rejects(() => loadConfig(invalidFile), /compiler\.enforceClosedInstances must be boolean/);
 });

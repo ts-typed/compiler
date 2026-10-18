@@ -103,6 +103,11 @@
           "type": "boolean",
           "description": "Lock `readonly` class fields against further writes after their first validated assignment, instead of leaving them as an ordinary writable runtime property.",
           "default": true
+        },
+        "enforceClosedInstances": {
+          "type": "boolean",
+          "description": "Make class instances non-extensible once construction completes (Object.preventExtensions), so properties not declared on the class cannot be added afterward, string or symbol keys alike. Opt-in: libraries that copy every key of a request body onto `new Dto()` before filtering (e.g. class-transformer with ValidationPipe whitelist) will throw a native TypeError unless configured to write only declared keys (e.g. excludeExtraneousValues with @Expose()).",
+          "default": false
         }
       },
       "default": {
@@ -110,7 +115,8 @@
         "onUnsupported": "warn",
         "strictClass": false,
         "enforcePrivate": true,
-        "enforceReadonly": true
+        "enforceReadonly": true,
+        "enforceClosedInstances": false
       }
     },
     "ncc": {

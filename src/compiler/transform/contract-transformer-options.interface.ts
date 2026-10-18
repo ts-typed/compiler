@@ -29,5 +29,14 @@ export interface ContractTransformerOptions {
    * pattern has no `#private` equivalent.
    */
   readonly enforcePrivate?: boolean;
+  /**
+   * When true, every named class's instances are made non-extensible via
+   * `Object.preventExtensions(this)` once the most-derived class's constructor
+   * finishes, so properties not declared on the class (string or symbol keys)
+   * can no longer be added. Opt-in: other libraries that copy onto `new Dto()`
+   * instances (e.g. class-transformer's plainToInstance) will hit a native
+   * TypeError unless configured to write only declared keys.
+   */
+  readonly enforceClosedInstances?: boolean;
   readonly onDiagnostic?: (diagnostic: CoverageDiagnostic) => void;
 }

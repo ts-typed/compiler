@@ -1031,7 +1031,16 @@ function visitClassMembers(
     visitedMembers.push(staticGuardBlock);
   }
 
-  if (guards.length === 0 && privateInitStatements.length === 0 && privateLockStatements.length === 0) {
+  // Anonymous class expressions have no name for `new.target` to be compared
+  // against, so they are never sealed (see createClosedInstanceSealStatement).
+  const sealInstances = optionsForState(state).enforceClosedInstances === true && node.name !== undefined;
+
+  if (
+    guards.length === 0
+    && privateInitStatements.length === 0
+    && privateLockStatements.length === 0
+    && !sealInstances
+  ) {
     return visitedMembers;
   }
 
@@ -1043,10 +1052,15 @@ function visitClassMembers(
     ...privateInitStatements,
   ];
   const requiredFieldLockStatements = createRequiredFieldFinalizeStatements(node, guards, state, factory, typescript);
+  // The seal must come last: every field guard is installed and every lock
+  // above has run before the instance stops accepting new properties.
   const lockStatements = [
     ...guards.filter((guard) => guard.readonlyField).map((guard) => createLockReadonlyFieldCall(factory, state, guard)),
     ...privateLockStatements,
     ...requiredFieldLockStatements,
+    ...(sealInstances && node.name !== undefined
+      ? [createClosedInstanceSealStatement(node.name, factory, typescript)]
+      : []),
   ];
   if (implementationConstructor === undefined) {
     const constructor = createConstructor(factory, installStatements, lockStatements, isDerived, typescript);
@@ -1097,6 +1111,33 @@ function createRequiredFieldFinalizeStatements(
       factory.createBlock(lockCalls, true),
     ),
   ];
+}
+
+/**
+ * Builds `if (new.target === <ClassName>) Object.preventExtensions(this);`,
+ * the last statement of a named class's constructor when
+ * `compiler.enforceClosedInstances` is on. The `new.target` guard makes only
+ * the most-derived class seal the instance: a base constructor running via
+ * `super()` sees `new.target` as the subclass, so it never seals before the
+ * subclass has added its own fields. A non-extensible object rejects new
+ * properties of every kind, including symbol keys, while still allowing
+ * writes to properties that already exist.
+ */
+function createClosedInstanceSealStatement(
+  className: ts.Identifier,
+  factory: ts.NodeFactory,
+  typescript: typeof import('typescript'),
+): ts.Statement {
+  return factory.createIfStatement(
+    createNewTargetIsClassCheck(factory, typescript, className),
+    factory.createExpressionStatement(
+      factory.createCallExpression(
+        factory.createPropertyAccessExpression(factory.createIdentifier('Object'), 'preventExtensions'),
+        undefined,
+        [factory.createThis()],
+      ),
+    ),
+  );
 }
 
 /**

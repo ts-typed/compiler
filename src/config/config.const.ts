@@ -13,6 +13,7 @@ export const DEFAULT_CONFIG: ProjectConfig = {
     strictClass: false,
     enforcePrivate: true,
     enforceReadonly: true,
+    enforceClosedInstances: false,
   },
   ncc: {
     enabled: true,

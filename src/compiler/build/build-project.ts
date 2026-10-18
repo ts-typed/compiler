@@ -89,6 +89,7 @@ export async function buildProject(config: ProjectConfig): Promise<BuildReport> 
         strictClass: config.compiler.strictClass,
         enforceReadonly: config.compiler.enforceReadonly,
         enforcePrivate: config.compiler.enforcePrivate,
+        enforceClosedInstances: config.compiler.enforceClosedInstances,
         onDiagnostic: (diagnostic) => transformDiagnostics.push(diagnostic),
       });
       const emitStart = now();

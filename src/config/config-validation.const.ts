@@ -18,6 +18,7 @@ export const COMPILER_KEYS = new Set([
   'strictClass',
   'enforcePrivate',
   'enforceReadonly',
+  'enforceClosedInstances',
 ]);
 
 export const NCC_KEYS = new Set([

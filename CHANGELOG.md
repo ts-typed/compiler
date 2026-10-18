@@ -4,6 +4,16 @@ All notable changes to `@ts-typed/compiler` are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.1.7] - 2026-10-18
+
+### Added
+
+- A new opt-in `compiler.enforceClosedInstances` config flag (default `false`) closes the `CLOSED_INSTANCES`/`SYMBOL_KEYS` gap: when set to `true`, a class instance becomes non-extensible (`Object.preventExtensions(this)`) once construction of its most-derived class fully completes, reusing the same `new.target` guard already used for readonly/required field locking so a subclass's own fields are still installed before the seal. Once sealed, no new property — string- or symbol-keyed — can be added to the instance; declared fields can still be reassigned normally. Rejection uses native `Object.preventExtensions` semantics (a `Reflect.set` of a new property returns `false`; a direct strict-mode assignment throws a native `TypeError`), not `StrictTypeError` — turning that into a catchable `StrictTypeError` would need a `Proxy` wrapper around every instance, which is more overhead than this opt-in trade-off calls for.
+
+  **This is deliberately opt-in, and enabling it is a cross-cutting decision, not a free correctness upgrade.** The previous attempt at this (see 0.1.3's "deliberately NOT shipped" note) broke NestJS's `class-transformer` + `ValidationPipe({ whitelist: true, forbidNonWhitelisted: true })` pattern, which copies every request-body key onto a `new Dto()` instance first and only strips non-whitelisted keys afterward — sealing the instance makes that first copy throw before the whitelist step ever runs. If you turn `enforceClosedInstances` on, you must configure the rest of your stack to never write an undeclared key to that class in the first place (e.g. `class-transformer`'s `excludeExtraneousValues: true` with `@Expose()` decorators, which only ever writes known keys, instead of copy-then-strip). **A mismatch between this flag and another library's config is an application configuration bug, not a ts-typed bug**: the same rule applies to any other ts-typed/third-party option pair (e.g. `allowExtraPropertiesAll` vs. a validator's own whitelist setting) — pick one behavior and configure every layer to agree with it.
+
+  Anonymous class expressions are not sealed (there is no name for `new.target` to compare against, the same limitation `lockReadonlyField`/`lockRequiredField` already have).
+
 ## [0.1.6] - 2026-10-18
 
 ### Added
