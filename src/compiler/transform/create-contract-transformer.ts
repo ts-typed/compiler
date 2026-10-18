@@ -110,6 +110,9 @@ export function createContractTransformer(
         if (typescript.isCallExpression(node)) {
           return visitCallExpression(node, state, factory, typescript, visitor, context);
         }
+        if (typescript.isNewExpression(node)) {
+          return visitNewExpression(node, state, factory, typescript, visitor, context);
+        }
         if (typescript.isClassDeclaration(node)) {
           return visitClassDeclaration(node, state, factory, typescript, visitor, context);
         }
@@ -2366,6 +2369,105 @@ function visitCallExpression(
   const visited = typescript.visitEachChild(node, visitor, context) as ts.CallExpression;
   const rewritten = rewriteRuntimeRequire(visited, state, factory, typescript);
   return guardExplicitGenericCall(node, rewritten, state, factory, typescript);
+}
+
+function visitNewExpression(
+  node: ts.NewExpression,
+  state: FileTransformState,
+  factory: ts.NodeFactory,
+  typescript: typeof import('typescript'),
+  visitor: ts.Visitor,
+  context: ts.TransformationContext,
+): ts.Expression {
+  const visited = typescript.visitEachChild(node, visitor, context) as ts.NewExpression;
+  return guardExplicitGenericConstruct(node, visited, state, factory, typescript);
+}
+
+/**
+ * Caller-side transport for generic class construction with EXPLICIT type arguments (`new Box<Person>(x)`).
+ * Mirrors `guardExplicitGenericCall` for constructors: each constructor argument whose instantiated
+ * parameter type is protectable is checked as an argument, and the constructed instance is checked
+ * against the instantiated instance type. Constructors are always synchronous, so there is no async
+ * branch. Inferred type arguments (`new Box(x)`) are not handled. Rest parameters and spread
+ * arguments are not validated.
+ */
+function guardExplicitGenericConstruct(
+  node: ts.NewExpression,
+  visited: ts.NewExpression,
+  state: FileTransformState,
+  factory: ts.NodeFactory,
+  typescript: typeof import('typescript'),
+): ts.Expression {
+  if (node.typeArguments === undefined || node.typeArguments.length === 0) {
+    return visited;
+  }
+  const checker = optionsForState(state).analysis.checker;
+  const signature = checker.getResolvedSignature(node);
+  const declaration = signature?.declaration as ts.SignatureDeclaration | ts.ClassLikeDeclaration | undefined;
+  if (signature === undefined || declaration === undefined) {
+    return visited;
+  }
+  // A constructor's type parameters live on its class; a construct signature carries its own.
+  const genericOwner = typescript.isConstructorDeclaration(declaration) ? declaration.parent : declaration;
+  if (genericOwner.typeParameters === undefined) {
+    return visited;
+  }
+
+  const parameterSymbols = signature.getParameters();
+  const parameterDeclarations: readonly ts.ParameterDeclaration[] = typescript.isClassLike(declaration)
+    ? []
+    : declaration.parameters;
+  // `new Box<Person>` without parentheses has no argument list.
+  const sourceArguments = visited.arguments ?? [];
+  const args = [...sourceArguments];
+  let guardedArguments = false;
+  for (let index = 0; index < args.length && index < parameterSymbols.length; index += 1) {
+    if (typescript.isSpreadElement(sourceArguments[index])) {
+      break;
+    }
+    if (parameterDeclarations[index]?.dotDotDotToken !== undefined) {
+      break;
+    }
+    const parameterType = checker.getTypeOfSymbolAtLocation(parameterSymbols[index], node);
+    const schema = resolveProtectedCallSchema(parameterType, node, state, typescript);
+    if (schema === undefined) {
+      continue;
+    }
+    args[index] = createProtectCall(
+      factory,
+      state,
+      schema,
+      args[index],
+      { kind: 'parameter', name: parameterSymbols[index].getName() },
+      'argument',
+    );
+    guardedArguments = true;
+  }
+
+  // The resolved construct signature's return type is the constructed instance type.
+  const returnSchema = resolveProtectedCallSchema(signature.getReturnType(), node, state, typescript);
+  if (!guardedArguments && returnSchema === undefined) {
+    return visited;
+  }
+
+  const construct = guardedArguments
+    ? factory.updateNewExpression(visited, visited.expression, visited.typeArguments, args)
+    : visited;
+  if (returnSchema === undefined) {
+    return construct;
+  }
+  const constructorName = typescript.isIdentifier(visited.expression)
+    ? visited.expression.text
+    : visited.expression.getText(state.sourceFile);
+  return createProtectCall(
+    factory,
+    state,
+    returnSchema,
+    construct,
+    { kind: 'return', name: constructorName },
+    'return',
+    constructorName,
+  );
 }
 
 function rewriteRuntimeRequire(

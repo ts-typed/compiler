@@ -4,6 +4,14 @@ All notable changes to `@ts-typed/compiler` are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.1.15] - 2026-10-18
+
+### Added
+
+- `GENERIC_TRANSPORT`'s call-site validation now also covers `new` expressions with an explicit type argument (`new Box<Person>(x)`), mirroring the existing explicit-call-expression support (0.1.11): each checkable constructor argument is validated against the instantiated parameter type, and the constructed instance is validated against the instantiated instance type (`checker.getResolvedSignature(node)` works the same way for a construct signature as for a call signature). A generic class's type parameters live on the CLASS declaration, not on an implicit/default constructor, so the owning class's `typeParameters` are checked when the resolved declaration is a constructor without its own; a class with no declared constructor at all (the implicit default) is handled too. There is no async equivalent for a constructor — construction is always synchronous in JS/TS, so unlike the call-expression case there's no `.then()` branch needed here.
+
+  **Known limitations, not covered by this release** (same scope boundaries as the call-expression feature): an inferred type argument (`new Box(x)`, no explicit `<T>`) is not validated. Rest/spread constructor arguments are skipped.
+
 ## [0.1.14] - 2026-10-18
 
 ### Added

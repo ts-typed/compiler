@@ -244,3 +244,52 @@ test('async explicit call checks the argument synchronously and the return async
   ]);
   assert.deepEqual(results, ['sync-argument', 'strict:async-both-return:return:return']);
 });
+
+test('explicit new Box<Person> validates the constructor argument before the constructor body runs', () => {
+  const results = runScenario([
+    'let ran = false;',
+    'class Box<T> { public readonly value: T; public constructor(value: T) { ran = true; this.value = value; } }',
+    'const bad = { name: "Ada", age: "old" } as any;',
+    'record("ctor-arg", () => { new Box<Person>(bad); });',
+    'results.push(`ran:${ran}`);',
+  ]);
+  assert.deepEqual(results, ['strict:ctor-arg:parameter:argument', 'ran:false']);
+});
+
+test('explicit new Box<Person> accepts a valid argument and keeps the instance value', () => {
+  const results = runScenario([
+    'class Box<T> { public readonly value: T; public constructor(value: T) { this.value = value; } }',
+    'const good: Person = { name: "Ada", age: 36 };',
+    'const box = new Box<Person>(good);',
+    'results.push(box.value === good ? "same" : "different");',
+  ]);
+  assert.deepEqual(results, ['same']);
+});
+
+test('explicit new Liar<number> checks the constructed instance independently of the argument', () => {
+  const results = runScenario([
+    // The constructor parameter is `unknown`, so the argument is never checked; only the instance is wrong.
+    'class Liar<T> { public readonly value: T; public constructor(x: unknown) { this.value = "oops" as unknown as T; } }',
+    'record("ctor-return", () => { new Liar<number>(1); });',
+    'record("ctor-valid-return", () => { new Liar<string>(1); });',
+  ]);
+  assert.deepEqual(results, ['strict:ctor-return:return:return', 'ok:ctor-valid-return']);
+});
+
+test('a generic construction without explicit type arguments is not guarded at the construction site', () => {
+  const results = runScenario([
+    'class Box<T> { public readonly value: T; public constructor(value: T) { this.value = value; } }',
+    'const bad = { name: "Ada", age: "old" };',
+    'record("ctor-inferred", () => { if (new Box(bad).value !== bad) throw new Error("changed"); });',
+  ]);
+  assert.deepEqual(results, ['ok:ctor-inferred']);
+});
+
+test('an ordinary non-generic class construction is unaffected', () => {
+  const results = runScenario([
+    'class Plain { public readonly value: unknown; public constructor(value: unknown) { this.value = value; } }',
+    'const bad = { name: "Ada", age: "old" } as any;',
+    'record("plain-new", () => { if (new Plain(bad).value !== bad) throw new Error("changed"); });',
+  ]);
+  assert.deepEqual(results, ['ok:plain-new']);
+});
