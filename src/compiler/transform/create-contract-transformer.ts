@@ -2362,8 +2362,18 @@ function visitCallExpression(
   typescript: typeof import('typescript'),
   visitor: ts.Visitor,
   context: ts.TransformationContext,
-): ts.CallExpression {
+): ts.Expression {
   const visited = typescript.visitEachChild(node, visitor, context) as ts.CallExpression;
+  const rewritten = rewriteRuntimeRequire(visited, state, factory, typescript);
+  return guardExplicitGenericCall(node, rewritten, state, factory, typescript);
+}
+
+function rewriteRuntimeRequire(
+  visited: ts.CallExpression,
+  state: FileTransformState,
+  factory: ts.NodeFactory,
+  typescript: typeof import('typescript'),
+): ts.CallExpression {
   if (
     !typescript.isIdentifier(visited.expression) ||
     visited.expression.text !== 'require' ||
@@ -2378,6 +2388,103 @@ function visitCallExpression(
     visited.typeArguments,
     [factory.createStringLiteral(state.runtimeModule)],
   );
+}
+
+/**
+ * Caller-side transport for generic calls with EXPLICIT type arguments (`identity<Person>(x)`).
+ * A generic callee's body is compiled once and cannot see the concrete `T` of a given call, so
+ * the concrete signature is taken from the checker at this call site instead: each argument whose
+ * instantiated parameter type is protectable is checked as an argument, and the whole call is
+ * checked against the instantiated return type. Inferred type arguments (`identity(x)`) are not
+ * handled. Rest parameters and spread arguments are not validated.
+ */
+function guardExplicitGenericCall(
+  node: ts.CallExpression,
+  visited: ts.CallExpression,
+  state: FileTransformState,
+  factory: ts.NodeFactory,
+  typescript: typeof import('typescript'),
+): ts.Expression {
+  if (node.typeArguments === undefined || node.typeArguments.length === 0) {
+    return visited;
+  }
+  const checker = optionsForState(state).analysis.checker;
+  const signature = checker.getResolvedSignature(node);
+  const declaration = signature?.declaration as ts.SignatureDeclaration | undefined;
+  if (signature === undefined || declaration === undefined || declaration.typeParameters === undefined) {
+    return visited;
+  }
+
+  const parameterSymbols = signature.getParameters();
+  const parameterDeclarations = declaration.parameters;
+  const args = [...visited.arguments];
+  let guardedArguments = false;
+  for (let index = 0; index < args.length && index < parameterSymbols.length; index += 1) {
+    if (typescript.isSpreadElement(visited.arguments[index])) {
+      break;
+    }
+    if (parameterDeclarations[index]?.dotDotDotToken !== undefined) {
+      break;
+    }
+    const parameterType = checker.getTypeOfSymbolAtLocation(parameterSymbols[index], node);
+    const schema = resolveProtectedCallSchema(parameterType, node, state, typescript);
+    if (schema === undefined) {
+      continue;
+    }
+    args[index] = createProtectCall(
+      factory,
+      state,
+      schema,
+      args[index],
+      { kind: 'parameter', name: parameterSymbols[index].getName() },
+      'argument',
+    );
+    guardedArguments = true;
+  }
+
+  const functionDeclaration = declaration as ts.FunctionLikeDeclaration;
+  const isAsyncOrGenerator = hasModifier(typescript, functionDeclaration, typescript.SyntaxKind.AsyncKeyword) ||
+    functionDeclaration.asteriskToken !== undefined;
+  const returnSchema = isAsyncOrGenerator
+    ? undefined
+    : resolveProtectedCallSchema(signature.getReturnType(), node, state, typescript);
+
+  if (!guardedArguments && returnSchema === undefined) {
+    return visited;
+  }
+
+  const call = guardedArguments
+    ? factory.updateCallExpression(visited, visited.expression, visited.typeArguments, args)
+    : visited;
+  if (returnSchema === undefined) {
+    return call;
+  }
+  const calleeName = typescript.isIdentifier(visited.expression)
+    ? visited.expression.text
+    : visited.expression.getText(state.sourceFile);
+  return createProtectCall(
+    factory,
+    state,
+    returnSchema,
+    call,
+    { kind: 'return', name: calleeName },
+    'return',
+    calleeName,
+  );
+}
+
+function resolveProtectedCallSchema(
+  type: ts.Type,
+  node: ts.Node,
+  state: FileTransformState,
+  typescript: typeof import('typescript'),
+): Schema | undefined {
+  if (isUncheckableType(type, typescript)) {
+    return undefined;
+  }
+  const resolution = optionsForState(state).analysis.resolver.resolve(type, node);
+  // Same rule as the callee-side guards: any schema other than 'unsupported' is enforced.
+  return resolution.status === 'unsupported' ? undefined : resolution.schema;
 }
 
 function shouldRewriteModule(

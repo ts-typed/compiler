@@ -4,6 +4,16 @@ All notable changes to `@ts-typed/compiler` are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.1.11] - 2026-10-18
+
+### Added
+
+- Closes the `GENERIC_TRANSPORT` gap for the explicit-type-argument case: calling a generic function with an explicit type argument (`identity<Person>(x)`, `wrap<number>(x)`) now validates both the arguments and the return value against the CONCRETE, call-site-specific type, instead of the unresolvable bare type parameter the function's own body sees. This is unconditional, not behind a config flag — unlike `enforceMutationGuards`/`enforceClosedInstances`, there is no existing behavior to preserve for a case that previously did nothing at all.
+
+  **Why this needed a new mechanism, not a tweak to existing checks:** every OTHER parameter check ts-typed emits is injected inside the CALLEE's own function body, compiled once; for a generic function that body is the SAME compiled code for every call, so a bare `T` has no concrete type to check against there — this is why `identity<Person>(wrongShapedValue)` + `identity<string>(wrongShapedValue)` always looked identical from inside `identity`. The fix works from the CALLER's side instead: for a call expression with an explicit type argument, `checker.getResolvedSignature(node)` hands back a signature TypeScript itself has ALREADY instantiated with the concrete type substituted in — no manual substitution needed. Each argument whose instantiated parameter type is checkable gets wrapped in `protectValue` (`contractKind: 'parameter'`, `operation: 'argument'`) before the call runs, and the whole call expression gets wrapped in `protectValue` against the instantiated return type (`contractKind: 'return'`, `operation: 'return'`) — both using the exact same transform-time resolver call already used for destructuring (0.1.4) and type predicates (0.1.5).
+
+  **Known limitations, not covered by this release:** an INFERRED type argument (`identity(x)`, no explicit `<T>`) is not transported — replicating the checker's own inference at the call site is a separate, harder problem. Rest parameters and spread arguments are skipped (iteration stops at the first one encountered). `async`/generator functions have their arguments checked but not their return value (the instantiated return type is a `Promise<...>`/iterator wrapper, not the resolved inner value). `new Box<Person>(x)` construct expressions are not covered, only plain call expressions. Generic classes and generic methods with no call-expression form are untouched.
+
 ## [0.1.10] - 2026-10-18
 
 ### Added

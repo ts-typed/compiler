@@ -1,0 +1,153 @@
+'use strict';
+
+const assert = require('node:assert/strict');
+const { mkdtempSync, mkdirSync, writeFileSync } = require('node:fs');
+const { tmpdir } = require('node:os');
+const { dirname, join } = require('node:path');
+const { spawnSync } = require('node:child_process');
+const test = require('node:test');
+
+const { analyzeProject } = require('../../../dist/compiler/analysis');
+const { createContractTransformer } = require('../../../dist/compiler/transform');
+
+const runtimeModule = join(__dirname, '../../../dist/runtime');
+
+function writeProject(source) {
+  const projectRoot = mkdtempSync(join(tmpdir(), 'ts-typed-generic-call-'));
+  const sourceRoot = join(projectRoot, 'src');
+  const declarationRoot = join(projectRoot, 'node_modules', 'ts-typed');
+  mkdirSync(sourceRoot, { recursive: true });
+  mkdirSync(declarationRoot, { recursive: true });
+  writeFileSync(
+    join(declarationRoot, 'index.d.ts'),
+    [
+      'export class StrictTypeError extends TypeError {',
+      '  readonly contractKind: string;',
+      '  readonly operation: string;',
+      '}',
+      'export function StrictClass(): ClassDecorator;',
+      'export function StructuralClass(): ClassDecorator;',
+    ].join('\n'),
+  );
+  writeFileSync(
+    join(sourceRoot, 'globals.d.ts'),
+    'declare const process: { stdout: { write(chunk: string): boolean } };\n',
+  );
+  writeFileSync(
+    join(projectRoot, 'tsconfig.json'),
+    JSON.stringify({
+      compilerOptions: {
+        strict: true,
+        target: 'ES2022',
+        module: 'CommonJS',
+        moduleResolution: 'Node',
+        rootDir: './src',
+        outDir: './out',
+        skipLibCheck: true,
+      },
+      include: ['src/**/*.ts'],
+    }),
+  );
+  writeFileSync(join(sourceRoot, 'main.ts'), source);
+  return { projectRoot, tsconfigPath: join(projectRoot, 'tsconfig.json') };
+}
+
+function emitAndRun(source) {
+  const project = writeProject(source);
+  const analysis = analyzeProject({ tsconfigPath: project.tsconfigPath });
+  assert.equal(
+    analysis.tsDiagnostics.length,
+    0,
+    analysis.tsDiagnostics.map((diagnostic) => diagnostic.messageText).join('\n'),
+  );
+  const emitResult = analysis.program.emit(undefined, undefined, undefined, false, {
+    before: [createContractTransformer({ analysis, runtimeModule, onDiagnostic: () => {} })],
+  });
+  assert.equal(emitResult.emitSkipped, false);
+  const result = spawnSync(process.execPath, [join(project.projectRoot, 'out', 'main.js')], {
+    cwd: project.projectRoot,
+    encoding: 'utf8',
+    timeout: 10_000,
+    killSignal: 'SIGKILL',
+  });
+  assert.equal(result.status, 0, result.stderr);
+  return result.stdout.split(',');
+}
+
+const PROLOGUE = [
+  "import { StrictTypeError } from 'ts-typed';",
+  'interface Person { name: string; age: number }',
+  'const results: string[] = [];',
+  'function record(name: string, action: () => unknown): void {',
+  '  try {',
+  '    action();',
+  '    results.push(`ok:${name}`);',
+  '  } catch (error) {',
+  '    if (error instanceof StrictTypeError) {',
+  '      results.push(`strict:${name}:${error.contractKind}:${error.operation}`);',
+  '      return;',
+  '    }',
+  '    throw error;',
+  '  }',
+  '}',
+];
+
+function runScenario(lines) {
+  return emitAndRun([...PROLOGUE, ...lines, 'process.stdout.write(results.join(","));'].join('\n'));
+}
+
+test('explicit identity<Person> validates the argument before the generic body runs', () => {
+  const results = runScenario([
+    'let ran = false;',
+    'function identity<T>(x: T): T { ran = true; return x; }',
+    'const bad = { name: "Ada", age: "old" } as any;',
+    'record("arg", () => { identity<Person>(bad); });',
+    'results.push(`ran:${ran}`);',
+  ]);
+  assert.deepEqual(results, ['strict:arg:parameter:argument', 'ran:false']);
+});
+
+test('explicit identity<Person> accepts a valid argument and returns it unchanged', () => {
+  const results = runScenario([
+    'function identity<T>(x: T): T { return x; }',
+    'const good: Person = { name: "Ada", age: 36 };',
+    'results.push(identity<Person>(good) === good ? "same" : "different");',
+  ]);
+  assert.deepEqual(results, ['same']);
+});
+
+test('explicit wrap<number> rejects a bad argument', () => {
+  const results = runScenario([
+    'function wrap<T>(x: T): { value: T } { return { value: x }; }',
+    'record("wrap-arg", () => { wrap<number>("not-a-number" as any); });',
+  ]);
+  assert.deepEqual(results, ['strict:wrap-arg:parameter:argument']);
+});
+
+test('explicit generic call checks the instantiated return type independently of the argument', () => {
+  const results = runScenario([
+    // The parameter is `unknown`, so the argument is never checked here; only the return is wrong.
+    'function liar<T>(x: unknown): { value: T } { return { value: "oops" as unknown as T }; }',
+    'record("return-only", () => { liar<number>(1); });',
+    'record("valid-return", () => { liar<string>(1); });',
+  ]);
+  assert.deepEqual(results, ['strict:return-only:return:return', 'ok:valid-return']);
+});
+
+test('a call without explicit type arguments is not guarded at the call site', () => {
+  const results = runScenario([
+    'function identity<T>(x: T): T { return x; }',
+    'const bad = { name: "Ada", age: "old" };',
+    'record("inferred", () => { if (identity(bad) !== bad) throw new Error("changed"); });',
+  ]);
+  assert.deepEqual(results, ['ok:inferred']);
+});
+
+test('ordinary non-generic calls are unaffected and still validated by the callee', () => {
+  const results = runScenario([
+    'function add(a: number, b: number): number { return a + b; }',
+    'results.push(String(add(1, 2)));',
+    'record("callee-arg", () => { add("x" as any, 2); });',
+  ]);
+  assert.deepEqual(results, ['3', 'strict:callee-arg:parameter:argument']);
+});
