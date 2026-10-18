@@ -54,6 +54,10 @@ interface FileTransformState {
   readonly diagnostics: Set<string>;
   readonly functionStack: FunctionVisitState[];
   readonly privateConversions: Map<ts.Symbol, PrivateConversion>;
+  /** Whether this file is emitted as CommonJS, where exported bindings live on the `exports` object. */
+  readonly commonJsOutput: boolean;
+  /** Guard installs for top-level exported `let`/`var` bindings, placed right after the runtime prelude. */
+  readonly exportGuardStatements: ts.Statement[];
 }
 
 export function createContractTransformer(
@@ -82,6 +86,8 @@ export function createContractTransformer(
         privateConversions: options.enforcePrivate === true
           ? collectPrivateFieldConversions(sourceFile, typescript, checker, options)
           : new Map<ts.Symbol, PrivateConversion>(),
+        commonJsOutput: isCommonJsOutput(sourceFile, context.getCompilerOptions(), typescript),
+        exportGuardStatements: [],
       };
       stateOptions.set(state, options);
 
@@ -111,7 +117,9 @@ export function createContractTransformer(
           return visitClassExpression(node, state, factory, typescript, visitor, context);
         }
         if (typescript.isVariableDeclaration(node)) {
-          return visitVariableDeclaration(node, state, factory, typescript, visitor, context);
+          const visited = visitVariableDeclaration(node, state, factory, typescript, visitor, context);
+          registerExportedVariableGuard(node, state, factory, typescript);
+          return visited;
         }
         if (
           (typescript.isPrefixUnaryExpression(node) || typescript.isPostfixUnaryExpression(node)) &&
@@ -307,6 +315,93 @@ function visitVariableDeclaration(
     node.exclamationToken,
     node.type,
     createProtectCall(factory, state, descriptor.resolution.schema, initializer, descriptor, 'initialize'),
+  );
+}
+
+/**
+ * Installs a guard on the CommonJS `exports` object for a top-level exported
+ * `let`/`var` binding. Under CommonJS, TypeScript stores such a binding as a
+ * plain property of `exports` and routes every read and write through it, so
+ * a guarded accessor there also covers writes made from outside the module:
+ * `require(...)` and `import * as ns` both hand back that same object.
+ *
+ * The guard is installed uninitialized and placed right after the runtime
+ * prelude, so it is already in place before any module code runs. The
+ * declaration's own initializer, and every later write, is then validated
+ * by the accessor's setter. Only applies when the file is emitted as
+ * CommonJS; other module formats do not expose bindings on an `exports`
+ * object, so they are left untouched.
+ */
+function registerExportedVariableGuard(
+  node: ts.VariableDeclaration,
+  state: FileTransformState,
+  factory: ts.NodeFactory,
+  typescript: typeof import('typescript'),
+): void {
+  if (!state.commonJsOutput || !typescript.isIdentifier(node.name)) {
+    return;
+  }
+  const declarationList = node.parent;
+  if (!typescript.isVariableDeclarationList(declarationList)) {
+    return;
+  }
+  const bindingKeywordFlags = typescript.NodeFlags.Const |
+    typescript.NodeFlags.Using |
+    typescript.NodeFlags.AwaitUsing;
+  if ((declarationList.flags & bindingKeywordFlags) !== 0) {
+    return;
+  }
+  const statement = declarationList.parent;
+  if (
+    !typescript.isVariableStatement(statement) ||
+    !typescript.isSourceFile(statement.parent) ||
+    !hasModifier(typescript, statement, typescript.SyntaxKind.ExportKeyword) ||
+    hasModifier(typescript, statement, typescript.SyntaxKind.DeclareKeyword)
+  ) {
+    return;
+  }
+
+  const name = node.name.text;
+  const checker = optionsForState(state).analysis.checker;
+  const descriptor = getDescriptorForNode(node, state, typescript, 'variable');
+  let schema: Schema | undefined;
+  if (descriptor !== undefined) {
+    schema = descriptor.resolution.schema;
+  } else {
+    const type = checker.getTypeAtLocation(node.name);
+    schema = isUncheckableType(type, typescript)
+      ? undefined
+      : optionsForState(state).analysis.resolver.resolve(type, node).schema;
+  }
+  if (schema === undefined) {
+    return;
+  }
+  if (descriptor !== undefined) {
+    state.handledContracts.add(descriptor);
+  }
+
+  const context = createContextExpression(factory, state, descriptor ?? { kind: 'variable', name }, 'set');
+  state.exportGuardStatements.push(
+    factory.createExpressionStatement(
+      factory.createCallExpression(
+        factory.createPropertyAccessExpression(state.runtimeIdentifier, 'installFieldGuard'),
+        undefined,
+        [
+          factory.createIdentifier('exports'),
+          factory.createStringLiteral(name),
+          createSchemaExpression(typescript, factory, schema),
+          context,
+          factory.createObjectLiteralExpression([
+            factory.createPropertyAssignment('initialized', factory.createFalse()),
+            factory.createPropertyAssignment(
+              'allowExtraProperties',
+              optionsForState(state).allowExtraPropertiesAll === true ? factory.createTrue() : factory.createFalse(),
+            ),
+            factory.createPropertyAssignment('readonlyField', factory.createFalse()),
+          ]),
+        ],
+      ),
+    ),
   );
 }
 
@@ -1687,7 +1782,12 @@ function addRuntimePrelude(
   }
 
   const lastImportIndex = findLastImportIndex(typescript, sourceFile.statements);
-  const prelude = [runtimeImport, registryDeclaration, ...immediateDefinitionStatements];
+  const prelude = [
+    runtimeImport,
+    registryDeclaration,
+    ...immediateDefinitionStatements,
+    ...state.exportGuardStatements,
+  ];
   const statements: ts.Statement[] = [];
   if (lastImportIndex === -1) {
     statements.push(...prelude);
@@ -1761,6 +1861,24 @@ function resolveEmitModuleKind(
   return target >= typescript.ScriptTarget.ES2015
     ? typescript.ModuleKind.ES2015
     : typescript.ModuleKind.CommonJS;
+}
+
+/**
+ * Whether TypeScript emits this file as CommonJS, where module bindings are
+ * properties of the `exports` object. Node16/NodeNext and Preserve decide per
+ * file from `impliedNodeFormat`, the same way {@link isEsModuleOutput} does.
+ */
+function isCommonJsOutput(
+  sourceFile: ts.SourceFile,
+  compilerOptions: ts.CompilerOptions,
+  typescript: typeof import('typescript'),
+): boolean {
+  const moduleKind = resolveEmitModuleKind(compilerOptions, typescript);
+  const { ModuleKind } = typescript;
+  if (moduleKind === ModuleKind.Node16 || moduleKind === ModuleKind.NodeNext || moduleKind === ModuleKind.Preserve) {
+    return sourceFile.impliedNodeFormat === ModuleKind.CommonJS;
+  }
+  return moduleKind === ModuleKind.CommonJS;
 }
 
 function createRuntimeRequireStatement(

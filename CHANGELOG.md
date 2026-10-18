@@ -4,6 +4,12 @@ All notable changes to `@ts-typed/compiler` are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.1.6] - 2026-10-18
+
+### Added
+
+- An exported `let`/`var` module-level binding (`export let exportedCounter: number = 0;`), when compiled to CommonJS, now has a guard installed directly on the `exports` object for that property, reusing `installFieldGuard`. Internal reads/writes within the module keep working exactly as before. An external write through the same `exports` object — e.g. `Reflect.set(importedNamespace, 'exportedCounter', 'wrong')`, or a direct property assignment on an `import * as ns` namespace object, or on the object returned by a separate file's own `require(...)` call (CommonJS gives both the same object) — now throws a `StrictTypeError` (`contractKind: 'variable'`, `operation: 'set'`) when the value doesn't match the declared type, instead of silently corrupting the binding. `export const` is unaffected (TypeScript already rejects reassignment at compile time). Native ESM output is unaffected for a different reason: ES module namespace objects are non-writable by spec, so an external write already throws a plain `TypeError` with no help needed from ts-typed; internal writes there remain covered by the existing per-assignment check. AMD/UMD/System module output and the `let x; export { x };` export-list form are not covered (documented limitation — neither shape exposes the binding as a plain, guardable `exports.x` property in the emitted code).
+
 ## [0.1.5] - 2026-10-17
 
 ### Added
