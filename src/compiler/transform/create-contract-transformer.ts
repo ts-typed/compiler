@@ -1743,6 +1743,18 @@ function createDefinitionSchemaExpression(
     );
   }
 
+  // Unlike instanceOf/strictClassDefault below, this needs no live class
+  // reference embedded — it is a plain boolean fact the resolver already
+  // established purely from the AST/checker — so it applies regardless of
+  // which file declares the class, including the topLevelIndex === -1
+  // (cross-file) early-return just below.
+  const withAggregateErrors = options.analysis.resolver.isAggregateErrorsClass(definitionName)
+    ? factory.createObjectLiteralExpression([
+        ...(base as ts.ObjectLiteralExpression).properties,
+        factory.createPropertyAssignment('aggregateErrors', factory.createTrue()),
+      ])
+    : base;
+
   const declaration = classSymbol.valueDeclaration ?? classSymbol.declarations?.[0];
   const isSameFile = declaration !== undefined
     && declaration.getSourceFile().fileName === state.sourceFile.fileName;
@@ -1764,7 +1776,7 @@ function createDefinitionSchemaExpression(
           : 'compiler.strictClass is enabled, but this class is declared in a different file than its validation point; the compiler cannot embed a live reference to it here, so this contract falls back to structural validation.',
       );
     }
-    return { expression: base };
+    return { expression: withAggregateErrors };
   }
 
   const additionalProperties: ts.ObjectLiteralElementLike[] = [
@@ -1775,7 +1787,7 @@ function createDefinitionSchemaExpression(
     ),
   ];
   const expression = factory.createObjectLiteralExpression([
-    ...(base as ts.ObjectLiteralExpression).properties,
+    ...(withAggregateErrors as ts.ObjectLiteralExpression).properties,
     ...additionalProperties,
   ]);
   return { expression, deferAfterStatementIndex: topLevelIndex };

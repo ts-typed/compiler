@@ -21,6 +21,22 @@ function isValueObjectRuntimePath(fileName: string): boolean {
   return normalized.endsWith('/runtime/value-object.class.d.ts') && normalized.includes('/@ts-typed/compiler/');
 }
 
+/**
+ * Path heuristic for the runtime `AggregateErrors` decorator declaration.
+ * Same approach as `isValueObjectRuntimePath` above — a path check, not a
+ * full package-identity check.
+ */
+function isAggregateErrorsRuntimePath(fileName: string): boolean {
+  const normalized = fileName.replace(/\\/g, '/');
+  if (normalized.endsWith('/runtime/aggregate-errors.decorator.ts')) {
+    return true;
+  }
+  return (
+    normalized.endsWith('/runtime/aggregate-errors.decorator.d.ts') &&
+    normalized.includes('/@ts-typed/compiler/')
+  );
+}
+
 function escapeRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
@@ -39,6 +55,7 @@ export class TypeSchemaResolver {
   private readonly _resolvingDefinitions = new Set<ts.Type>();
   private readonly _classSymbolsByDefinitionName = new Map<string, ts.Symbol>();
   private readonly _valueObjectDefinitionNames = new Set<string>();
+  private readonly _aggregateErrorsDefinitionNames = new Set<string>();
 
   public constructor(
     private readonly _typescript: typeof import('typescript'),
@@ -72,6 +89,19 @@ export class TypeSchemaResolver {
    */
   public isValueObjectClass(definitionName: string): boolean {
     return this._valueObjectDefinitionNames.has(definitionName);
+  }
+
+  /**
+   * Whether a named object definition is backed by a class decorated with
+   * `@AggregateErrors()`, directly or through any ancestor in its
+   * base-class chain. Found by reading the decorator straight off the
+   * class declaration via the type checker — unlike `getClassSymbol`'s
+   * `instanceOf` use, this needs no live reference embedded at the
+   * validation point, so it works regardless of which file the class is
+   * declared in.
+   */
+  public isAggregateErrorsClass(definitionName: string): boolean {
+    return this._aggregateErrorsDefinitionNames.has(definitionName);
   }
 
   private _resolveType(type: ts.Type, node: ts.Node, canCreateDefinition: boolean): SchemaResolution {
@@ -417,6 +447,9 @@ export class TypeSchemaResolver {
       this._classSymbolsByDefinitionName.set(definitionName, classSymbol);
       if (this._isValueObjectType(type)) {
         this._valueObjectDefinitionNames.add(definitionName);
+      }
+      if (this._isAggregateErrorsType(type)) {
+        this._aggregateErrorsDefinitionNames.add(definitionName);
       }
     }
     this._definitionResolutions.set(type, resolution);
@@ -793,6 +826,87 @@ export class TypeSchemaResolver {
         this._typescript.isClassDeclaration(declaration) &&
         isValueObjectRuntimePath(declaration.getSourceFile().fileName),
     );
+  }
+
+  /**
+   * True when the class type (or any ancestor in its base-class chain)
+   * carries `@AggregateErrors()`. Mirrors `_isValueObjectType`'s walk, but
+   * checks each level's class declaration for the decorator instead of
+   * checking base-type identity against a single known class.
+   */
+  private _isAggregateErrorsType(type: ts.Type): boolean {
+    return this._hasAggregateErrorsDecorator(type, new Set<ts.Type>());
+  }
+
+  private _hasAggregateErrorsDecorator(type: ts.Type, visited: Set<ts.Type>): boolean {
+    if (visited.has(type) || !type.isClassOrInterface()) {
+      return false;
+    }
+    visited.add(type);
+    const symbol = type.getSymbol();
+    const ownDeclarations = symbol?.getDeclarations() ?? [];
+    const decoratedHere = ownDeclarations.some(
+      (declaration) =>
+        this._typescript.isClassDeclaration(declaration) &&
+        this._classDeclarationHasAggregateErrors(declaration),
+    );
+    if (decoratedHere) {
+      return true;
+    }
+    for (const baseType of this._checker.getBaseTypes(type)) {
+      if (this._hasAggregateErrorsDecorator(baseType, visited)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private _classDeclarationHasAggregateErrors(declaration: ts.ClassDeclaration): boolean {
+    const decorators = this._typescript.getDecorators(declaration) ?? [];
+    return decorators.some((decorator) => this._isAggregateErrorsDecoratorCall(decorator.expression));
+  }
+
+  /**
+   * Provenance check for the decorator call itself: the callee identifier
+   * must resolve (via the checker) to this package's own
+   * `runtime/aggregate-errors.decorator.ts` `AggregateErrors` function, not
+   * just any same-named function a consumer happened to write themselves —
+   * same reasoning as `_isValueObjectBase`'s path heuristic above.
+   */
+  private _isAggregateErrorsDecoratorCall(expression: ts.Expression): boolean {
+    if (!this._typescript.isCallExpression(expression) || !this._typescript.isIdentifier(expression.expression)) {
+      return false;
+    }
+    const declarations = this._resolveAliasedDeclarations(
+      this._checker.getSymbolAtLocation(expression.expression),
+    );
+    return declarations.some(
+      (declaration) =>
+        this._typescript.isFunctionDeclaration(declaration) &&
+        declaration.name?.text === 'AggregateErrors' &&
+        isAggregateErrorsRuntimePath(declaration.getSourceFile().fileName),
+    );
+  }
+
+  /**
+   * `getSymbolAtLocation` on an identifier that names an imported binding
+   * returns the local import/export-specifier symbol, not the declaration it
+   * ultimately refers to — and a package re-exporting through a barrel file
+   * (as this one does: `dist/index.d.ts` re-exporting from
+   * `./runtime/aggregate-errors.decorator`) can chain more than one such
+   * alias. This follows the chain all the way to the real declaration(s),
+   * same as TypeScript's own "go to definition" does.
+   */
+  private _resolveAliasedDeclarations(symbol: ts.Symbol | undefined): readonly ts.Declaration[] {
+    let current = symbol;
+    while (current !== undefined && (current.flags & this._typescript.SymbolFlags.Alias) !== 0) {
+      const aliased = this._checker.getAliasedSymbol(current);
+      if (aliased === current) {
+        break;
+      }
+      current = aliased;
+    }
+    return current?.getDeclarations() ?? [];
   }
 
   private _unsupported(reason: string): SchemaResolution & { readonly status: 'unsupported' } {
