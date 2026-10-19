@@ -190,3 +190,81 @@ test('a plain object literal crossing a parameter typed by an undecorated cross-
   assert.equal(result.isStrictTypeError, true, JSON.stringify(result));
   assert.equal(result.isAggregate, false, JSON.stringify(result));
 });
+
+test('a locally-defined, unrelated same-named AggregateErrors() decorator does not trigger aggregation', () => {
+  const result = runMain({
+    'dto.ts': [
+      'function AggregateErrors(): ClassDecorator {',
+      '  return () => { /* noop: not the real decorator */ };',
+      '}',
+      '',
+      '@AggregateErrors()',
+      'export class CreateUserDto {',
+      "  name: string = '';",
+      '  age: number = 0;',
+      '}',
+    ].join('\n'),
+    'main.ts': [
+      "import { StrictTypeError, AggregateStrictTypeError } from 'ts-typed';",
+      "import { CreateUserDto } from './dto';",
+      '',
+      'function createUser(dto: CreateUserDto): void { /* noop */ }',
+      '',
+      'let caught: any = undefined;',
+      'try {',
+      "  createUser({ name: 42, age: 'old' } as any);",
+      '} catch (error) {',
+      '  caught = error;',
+      '}',
+      'const results = {',
+      '  isStrictTypeError: caught instanceof StrictTypeError,',
+      '  isAggregate: caught instanceof AggregateStrictTypeError,',
+      '};',
+      'process.stdout.write(JSON.stringify(results));',
+    ].join('\n'),
+  });
+
+  assert.equal(result.isStrictTypeError, true, JSON.stringify(result));
+  assert.equal(result.isAggregate, false, JSON.stringify(result));
+});
+
+test('a subclass of an @AggregateErrors() DTO is detected through the base-class chain', () => {
+  const result = runMain({
+    'dto.ts': [
+      "import { AggregateErrors } from '@ts-typed/compiler';",
+      '',
+      '@AggregateErrors()',
+      'export class BaseDto {',
+      "  name: string = '';",
+      '}',
+      '',
+      'export class DerivedDto extends BaseDto {',
+      '  age: number = 0;',
+      '}',
+    ].join('\n'),
+    'main.ts': [
+      "import { AggregateStrictTypeError } from 'ts-typed';",
+      "import { DerivedDto } from './dto';",
+      '',
+      'function createUser(dto: DerivedDto): void { /* noop */ }',
+      '',
+      'let caught: any = undefined;',
+      'try {',
+      "  createUser({ name: 42, age: 'old' } as any);",
+      '} catch (error) {',
+      '  caught = error;',
+      '}',
+      'const results = {',
+      '  isAggregate: caught instanceof AggregateStrictTypeError,',
+      '  errorCount: caught === undefined ? 0 : caught.errors.length,',
+      '  paths: caught === undefined ? [] : caught.errors.map((e: any) => e.propertyPath),',
+      '};',
+      'process.stdout.write(JSON.stringify(results));',
+    ].join('\n'),
+  });
+
+  assert.equal(result.isAggregate, true, JSON.stringify(result));
+  assert.equal(result.errorCount, 2, JSON.stringify(result));
+  assert.ok(result.paths.some((path) => path.endsWith('.name')), JSON.stringify(result));
+  assert.ok(result.paths.some((path) => path.endsWith('.age')), JSON.stringify(result));
+});
