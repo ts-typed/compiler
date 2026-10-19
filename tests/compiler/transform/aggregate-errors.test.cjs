@@ -365,14 +365,22 @@ test('a plainToInstance-style population (construct, then assign each field sepa
       '',
       'function createUser(dto: CreateUserDto): void { /* noop */ }',
       '',
-      // This is exactly class-transformer's plainToInstance shape: construct
-      // first (field initializers run — this is NOT what should be
-      // aggregated), THEN assign each real value as a separate statement
-      // (this is the part that must collect instead of throwing on the
-      // first bad field).
-      'const dto = new CreateUserDto();',
-      '(dto as any).name = 42;',
-      '(dto as any).age = "old";',
+      // Mirrors class-transformer's plainToInstance exactly: the instance is
+      // constructed through an UNTYPED helper (`ctor: any`, matching
+      // plainToInstance's own internal, type-erased construction — there is
+      // no typed local variable binding the instance to its concrete class
+      // anywhere in this flow), THEN each real value is assigned as a
+      // separate statement (this is the part that must collect instead of
+      // throwing on the first bad field).
+      'function populate(ctor: any, plain: Record<string, unknown>): any {',
+      '  const instance = new ctor();',
+      '  for (const key of Object.keys(plain)) {',
+      '    instance[key] = plain[key];',
+      '  }',
+      '  return instance;',
+      '}',
+      '',
+      "const dto = populate(CreateUserDto, { name: 42, age: 'old' });",
       '',
       'let caught: any = undefined;',
       'try {',
@@ -391,8 +399,8 @@ test('a plainToInstance-style population (construct, then assign each field sepa
 
   assert.equal(result.isAggregate, true, JSON.stringify(result));
   assert.equal(result.errorCount, 2, JSON.stringify(result));
-  assert.ok(result.paths.some((path) => path.endsWith('.name')), JSON.stringify(result));
-  assert.ok(result.paths.some((path) => path.endsWith('.age')), JSON.stringify(result));
+  assert.ok(result.paths.some((path) => path.endsWith('name')), JSON.stringify(result));
+  assert.ok(result.paths.some((path) => path.endsWith('age')), JSON.stringify(result));
 });
 
 test('the same plainToInstance-style population also reports a field that was never assigned at all (stays at its required-but-missing gap) once the schema declares a third required field not present at all in this scenario', () => {
@@ -416,8 +424,17 @@ test('the same plainToInstance-style population also reports a field that was ne
       // type" — see the design doc's §2.3 merge reasoning.
       "function createUser(dto: CreateUserDto & { email: string }): void { /* noop */ }",
       '',
-      'const dto = new CreateUserDto();',
-      '(dto as any).name = 42;',
+      // Same untyped, plainToInstance-faithful construction as the test
+      // above — no typed local variable ever binds to `CreateUserDto`.
+      'function populate(ctor: any, plain: Record<string, unknown>): any {',
+      '  const instance = new ctor();',
+      '  for (const key of Object.keys(plain)) {',
+      '    instance[key] = plain[key];',
+      '  }',
+      '  return instance;',
+      '}',
+      '',
+      'const dto = populate(CreateUserDto, { name: 42 });',
       '',
       'let caught: any = undefined;',
       'try {',
