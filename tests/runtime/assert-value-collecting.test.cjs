@@ -116,3 +116,55 @@ test('assertValue (non-collecting) still throws on the very first violation, unc
     (error) => error instanceof StrictTypeError && error.propertyPath === 'CreateUserDto.name',
   );
 });
+
+test('assertValueCollecting walks into an optional nested DTO instead of reporting one opaque "union" violation', () => {
+  const profileSchema = {
+    kind: 'object',
+    properties: {
+      bio: { schema: stringSchema },
+      age: { schema: numberSchema },
+    },
+  };
+  const schema = {
+    kind: 'object',
+    properties: {
+      profile: {
+        schema: { kind: 'union', schemas: [profileSchema, { kind: 'primitive', name: 'undefined' }] },
+        optional: true,
+      },
+    },
+  };
+  const violations = assertValueCollecting(schema, { profile: { bio: 7, age: 'old' } }, context);
+
+  assert.equal(violations.length, 2);
+  assert.deepEqual(
+    violations.map((v) => v.propertyPath).sort(),
+    ['CreateUserDto.profile.age', 'CreateUserDto.profile.bio'],
+  );
+});
+
+test('assertValueCollecting still reports a plain "union" violation when the value matches zero or several members ambiguously', () => {
+  const schema = {
+    kind: 'object',
+    properties: {
+      value: { schema: { kind: 'union', schemas: [stringSchema, numberSchema] } },
+    },
+  };
+  const violations = assertValueCollecting(schema, { value: true }, context);
+
+  assert.equal(violations.length, 1);
+  assert.equal(violations[0].expected, 'union');
+});
+
+test('non-collecting (fail-fast) union validation is unaffected by the new collecting-mode branch', () => {
+  const profileSchema = {
+    kind: 'object',
+    properties: { bio: { schema: stringSchema } },
+  };
+  const schema = { kind: 'union', schemas: [profileSchema, { kind: 'primitive', name: 'undefined' }] };
+
+  assert.throws(
+    () => assertValue(schema, { bio: 7 }, context),
+    (error) => error.propertyPath === context.propertyPath && error.expected === 'union',
+  );
+});

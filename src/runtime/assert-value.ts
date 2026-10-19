@@ -143,6 +143,14 @@ function validateUnion(
   path: string,
   state: ValidationState,
 ): void {
+  if (state.collector !== undefined) {
+    const soleMatch = selectSoleStructuralMatch(schema, value, state);
+    if (soleMatch !== undefined) {
+      validate(soleMatch, value, context, path, state);
+      return;
+    }
+  }
+
   for (const candidate of schema.schemas) {
     if (succeeds(candidate, value, context, path, state)) {
       return;
@@ -150,6 +158,36 @@ function validateUnion(
   }
 
   report(state, context, path, 'union', value, 'TYPE_MISMATCH');
+}
+
+/**
+ * In collecting mode only: a union member can itself contain many nested
+ * violations (an optional/nullable nested DTO), but the normal probe below
+ * only ever reports one opaque pass/fail per candidate, in an isolated
+ * fail-fast clone — so a nested DTO's own violations never reach the
+ * collected list. This looks at the value's actual JS shape (an array, or
+ * any other non-null object) and returns the single union member whose
+ * resolved kind matches it, so that member's own validation — which may
+ * report many violations, at any depth — runs directly against the live
+ * collecting state. Returns undefined (falling back to the normal probe,
+ * unchanged) for a primitive/null/undefined value, or when more than one
+ * member's resolved kind matches (a genuinely ambiguous union) — this is
+ * deliberately narrow: it only resolves the common "exactly one
+ * object/array-shaped candidate" case, not every possible union shape.
+ */
+function selectSoleStructuralMatch(
+  schema: UnionSchema,
+  value: unknown,
+  state: ValidationState,
+): Schema | undefined {
+  if (value === null || typeof value !== 'object') {
+    return undefined;
+  }
+  const kind: 'array' | 'object' = Array.isArray(value) ? 'array' : 'object';
+  const matches = schema.schemas
+    .map((member) => (member.kind === 'ref' ? resolveReference(member, state.registry) : member))
+    .filter((resolved) => resolved.kind === kind);
+  return matches.length === 1 ? matches[0] : undefined;
 }
 
 function validateIntersection(
