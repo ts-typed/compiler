@@ -415,3 +415,42 @@ test('field mutation after construction stays fail-fast even on an @AggregateErr
     instance.name = 42;
   }, runtime.StrictTypeError);
 });
+
+test('protectValue aggregates a plain object (no instance, no runtime decorator call) when the schema itself carries aggregateErrors: true', () => {
+  // This is the realistic compiled-DTO scenario: ts-typed validates a
+  // parameter structurally without instantiating it (SPEC §3.10), so the
+  // value is a plain object literal, never `new CreateUserDto()`. The
+  // schema carries the flag instead of relying on the runtime value's
+  // prototype chain (that's Task 6 — this test hand-builds the schema to
+  // prove protectValue honors the flag, independent of how it got there).
+  const schema = {
+    kind: 'object',
+    properties: {
+      name: { schema: stringSchema },
+      age: { schema: numberSchema },
+    },
+    aggregateErrors: true,
+  };
+  const parameterContext = { contractKind: 'parameter', operation: 'argument', propertyPath: 'CreateUserDto' };
+
+  assert.throws(
+    () => guards.protectValue(schema, { name: 42, age: 'old' }, parameterContext),
+    (error) => error instanceof runtime.AggregateStrictTypeError && error.errors.length === 2,
+  );
+});
+
+test('protectValue stays fail-fast for a plain object whose schema has no aggregateErrors flag', () => {
+  const schema = {
+    kind: 'object',
+    properties: {
+      name: { schema: stringSchema },
+      age: { schema: numberSchema },
+    },
+  };
+  const parameterContext = { contractKind: 'parameter', operation: 'argument', propertyPath: 'PlainDto' };
+
+  assert.throws(
+    () => guards.protectValue(schema, { name: 42, age: 'old' }, parameterContext),
+    (error) => error instanceof runtime.StrictTypeError && !(error instanceof runtime.AggregateStrictTypeError),
+  );
+});

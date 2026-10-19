@@ -95,6 +95,19 @@ export interface ObjectSchema {
    */
   readonly valueObjectCtor?: Function;
   readonly strictClassDefault?: boolean;
+  /**
+   * True when the class backing this definition carries `@AggregateErrors()`
+   * — found statically by the compiler reading the decorator directly off
+   * the class declaration, regardless of which file declares the class (see
+   * `isAggregateErrorsClass` in `compiler/analysis/type-schema-resolver.ts`).
+   * `protectValue` (guards.ts) uses this, for a value crossing a parameter
+   * boundary, to collect every violation in the value instead of throwing on
+   * the first one — this is the primary detection signal; the runtime
+   * `isAggregateErrorsEnabled(value)` check (aggregate-errors.decorator.ts)
+   * is an additional fallback for a hand-built instance that never went
+   * through the compiler's schema for this type.
+   */
+  readonly aggregateErrors?: boolean;
 }
 
 export interface RefSchema {

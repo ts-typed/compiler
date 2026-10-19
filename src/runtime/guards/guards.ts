@@ -79,11 +79,15 @@ export function protectValue(
     return autoConstructValueObject(valueObjectCtor, value, prepared.context);
   }
 
+  const resolvedForAggregation = resolveReference(prepared.schema, prepared.context);
+  const schemaRequestsAggregation =
+    resolvedForAggregation.kind === 'object' && resolvedForAggregation.aggregateErrors === true;
+
   if (
     prepared.context.contractKind === 'parameter' &&
     isReferenceValue(value) &&
     !Array.isArray(value) &&
-    isAggregateErrorsEnabled(value)
+    (schemaRequestsAggregation || isAggregateErrorsEnabled(value))
   ) {
     const violations = assertValueCollecting(prepared.schema, value, prepared.context);
     if (violations.length > 0) {
