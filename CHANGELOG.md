@@ -4,6 +4,12 @@ All notable changes to `@ts-typed/compiler` are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.1.25] - 2026-10-19
+
+### Changed
+
+- Widened the supported range to `Node >=18` (from `>=22`) and `TypeScript >=5.4 <7` (from `>=5.9 <6`). Neither floor was backed by an actual API dependency: the Node APIs used throughout the codebase (`fs/promises` `cp`/`rm`/`mkdir`, `readline/promises`, `module.createRequire`, `util.inspect`, `Object.hasOwn`, `Array.prototype.at`) have all been available since Node 16/17, and the TypeScript Compiler API surface used (`ModuleKind.Node16`/`NodeNext`/`Preserve`, `isSatisfiesExpression`, `canHaveDecorators`/`getDecorators`) has been stable since TS 5.4. The `>=5.9` floor was an explicit, undocumented policy check in `validateTypescriptModule` rather than a technical requirement; it's now `>=5.4 <7` to match the real compatibility surface while still rejecting the next major (TS 7) by default.
+
 ## [0.1.24] - 2026-10-19
 
 ### Added

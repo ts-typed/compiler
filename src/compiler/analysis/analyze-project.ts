@@ -207,9 +207,9 @@ function validateTypescriptModule(candidate: unknown): typeof import('typescript
   const [majorText, minorText] = candidate.versionMajorMinor.split('.');
   const major = Number(majorText);
   const minor = Number(minorText);
-  if (major !== 5 || minor < 9) {
+  if (major < 5 || major > 6 || (major === 5 && minor < 4)) {
     throw new Error(
-      `Unsupported TypeScript ${candidate.version}; ts-typed requires TypeScript >=5.9 and <6.`,
+      `Unsupported TypeScript ${candidate.version}; ts-typed requires TypeScript >=5.4 and <7.`,
     );
   }
   return candidate;

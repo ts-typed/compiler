@@ -402,12 +402,12 @@ test('rejects an incompatible consumer TypeScript with a clear version diagnosti
   writeFileSync(join(typescriptRoot, 'package.json'), JSON.stringify({ main: 'index.js' }));
   writeFileSync(
     join(typescriptRoot, 'index.js'),
-    `const compiler = require(${JSON.stringify(require.resolve('typescript'))});\nmodule.exports = { ...compiler, version: '6.0.0', versionMajorMinor: '6.0' };\n`,
+    `const compiler = require(${JSON.stringify(require.resolve('typescript'))});\nmodule.exports = { ...compiler, version: '7.0.0', versionMajorMinor: '7.0' };\n`,
   );
 
   assert.throws(
     () => analyzeProject(project),
-    /Unsupported TypeScript 6\.0\.0; ts-typed requires TypeScript >=5\.9 and <6\./,
+    /Unsupported TypeScript 7\.0\.0; ts-typed requires TypeScript >=5\.4 and <7\./,
   );
 });
 

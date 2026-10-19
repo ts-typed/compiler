@@ -1,6 +1,6 @@
 {
     "name": "@ts-typed/compiler",
-    "version": "0.1.24",
+    "version": "0.1.25",
     "private": false,
     "publishConfig": {
         "access": "public"
@@ -8,7 +8,7 @@
     "description": "Runtime protection for TypeScript contracts",
     "license": "Apache-2.0",
     "engines": {
-        "node": ">=22"
+        "node": ">=18"
     },
     "main": "dist/index.js",
     "types": "dist/index.d.ts",
@@ -53,7 +53,7 @@
         "@vercel/ncc": "0.38.4"
     },
     "peerDependencies": {
-        "typescript": ">=5.9 <6"
+        "typescript": ">=5.4 <7"
     },
     "devDependencies": {
         "@types/node": "^22.15.21",
