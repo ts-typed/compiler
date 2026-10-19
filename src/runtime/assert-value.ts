@@ -19,6 +19,18 @@ import type { StrictTypeErrorInfo } from './strict-type-error-info.interface';
 interface ValidationState {
   readonly registry: SchemaRegistry;
   readonly visited: Map<object, Set<Schema>>;
+  /**
+   * When set, a violation is pushed here instead of being thrown immediately,
+   * and validation continues on to the next sibling (next object property,
+   * next array/tuple item, next Map/Set entry, etc.) instead of aborting the
+   * whole traversal. Absent (the default) means every existing fail-fast
+   * behavior is unchanged: the first violation throws `StrictTypeError`
+   * immediately, via `report()` below. `succeeds()`'s internal `cloneState()`
+   * deliberately omits this field, so a union's candidate probing always
+   * runs fail-fast even when the outer traversal is collecting — a
+   * candidate's failure is discardable, not a real violation.
+   */
+  readonly collector?: StrictTypeErrorInfo[];
 }
 
 const MAX_ARRAY_INDEX = 4_294_967_294;
@@ -34,6 +46,22 @@ export function assertValue(
   };
 
   validate(schema, value, context, context.propertyPath, state);
+}
+
+export function assertValueCollecting(
+  schema: Schema,
+  value: unknown,
+  context: AssertionContext,
+): StrictTypeErrorInfo[] {
+  const collector: StrictTypeErrorInfo[] = [];
+  const state: ValidationState = {
+    registry: context.registry ?? new SchemaRegistry(),
+    visited: new Map<object, Set<Schema>>(),
+    collector,
+  };
+
+  validate(schema, value, context, context.propertyPath, state);
+  return collector;
 }
 
 function validate(
@@ -56,32 +84,33 @@ function validate(
     case 'unknown':
       return;
     case 'never':
-      fail(context, path, 'never', value, 'TYPE_MISMATCH');
+      report(state, context, path, 'never', value, 'TYPE_MISMATCH');
+      return;
     case 'function':
       if (typeof value !== 'function') {
-        fail(context, path, 'function', value, 'TYPE_MISMATCH');
+        report(state, context, path, 'function', value, 'TYPE_MISMATCH');
       }
       return;
     case 'templateLiteral':
       if (typeof value !== 'string' || !matchesTemplateLiteral(schema.pattern, value)) {
-        fail(context, path, `template literal matching /${schema.pattern}/`, value, 'TYPE_MISMATCH');
+        report(state, context, path, `template literal matching /${schema.pattern}/`, value, 'TYPE_MISMATCH');
       }
       return;
     case 'date':
       // An `Invalid Date` is still a Date instance; reject it here with a
       // contract error instead of letting it fail later with a RangeError.
       if (!(value instanceof Date) || Number.isNaN(value.getTime())) {
-        fail(context, path, 'Date', value, 'TYPE_MISMATCH');
+        report(state, context, path, 'Date', value, 'TYPE_MISMATCH');
       }
       return;
     case 'primitive':
       if (!matchesPrimitive(schema.name, value)) {
-        fail(context, path, schema.name, value, 'TYPE_MISMATCH');
+        report(state, context, path, schema.name, value, 'TYPE_MISMATCH');
       }
       return;
     case 'literal':
       if (schema.value !== value) {
-        fail(context, path, literalName(schema.value), value, 'TYPE_MISMATCH');
+        report(state, context, path, literalName(schema.value), value, 'TYPE_MISMATCH');
       }
       return;
     case 'union':
@@ -120,7 +149,7 @@ function validateUnion(
     }
   }
 
-  fail(context, path, 'union', value, 'TYPE_MISMATCH');
+  report(state, context, path, 'union', value, 'TYPE_MISMATCH');
 }
 
 function validateIntersection(
@@ -165,14 +194,15 @@ function validateArray(
   state: ValidationState,
 ): void {
   if (!Array.isArray(value)) {
-    fail(context, path, 'array', value, 'TYPE_MISMATCH');
+    report(state, context, path, 'array', value, 'TYPE_MISMATCH');
+    return;
   }
 
   for (let index = 0; index < value.length; index += 1) {
     validate(schema.items, value[index], context, `${path}[${index}]`, state);
   }
 
-  validateArrayOwnProperties(value, context, path);
+  validateArrayOwnProperties(value, context, path, state);
 }
 
 function validateTuple(
@@ -183,15 +213,18 @@ function validateTuple(
   state: ValidationState,
 ): void {
   if (!Array.isArray(value)) {
-    fail(context, path, 'tuple', value, 'TYPE_MISMATCH');
+    report(state, context, path, 'tuple', value, 'TYPE_MISMATCH');
+    return;
   }
 
   if (schema.rest === undefined || schema.rest === false) {
     if (value.length !== schema.items.length) {
-      fail(context, path, `tuple(${schema.items.length})`, value, 'TYPE_MISMATCH');
+      report(state, context, path, `tuple(${schema.items.length})`, value, 'TYPE_MISMATCH');
+      return;
     }
   } else if (value.length < schema.items.length) {
-    fail(context, path, 'tuple', value, 'TYPE_MISMATCH');
+    report(state, context, path, 'tuple', value, 'TYPE_MISMATCH');
+    return;
   }
 
   for (let index = 0; index < schema.items.length; index += 1) {
@@ -204,7 +237,7 @@ function validateTuple(
     }
   }
 
-  validateArrayOwnProperties(value, context, path);
+  validateArrayOwnProperties(value, context, path, state);
 }
 
 /**
@@ -219,7 +252,8 @@ function validateMap(
   state: ValidationState,
 ): void {
   if (!(value instanceof Map)) {
-    fail(context, path, 'Map', value, 'TYPE_MISMATCH');
+    report(state, context, path, 'Map', value, 'TYPE_MISMATCH');
+    return;
   }
 
   let index = 0;
@@ -238,7 +272,8 @@ function validateSet(
   state: ValidationState,
 ): void {
   if (!(value instanceof Set)) {
-    fail(context, path, 'Set', value, 'TYPE_MISMATCH');
+    report(state, context, path, 'Set', value, 'TYPE_MISMATCH');
+    return;
   }
 
   let index = 0;
@@ -261,18 +296,20 @@ function validateObject(
     // instances at the boundary (see autoConstructValueObject in guards.ts),
     // so reaching this point with a raw value means no boundary converted it.
     if (!(value instanceof schema.valueObjectCtor)) {
-      fail(context, path, valueObjectName(schema.valueObjectCtor), value, 'TYPE_MISMATCH');
+      report(state, context, path, valueObjectName(schema.valueObjectCtor), value, 'TYPE_MISMATCH');
     }
     return;
   }
 
   if (!isReferenceValue(value) || Array.isArray(value)) {
-    fail(context, path, 'object', value, 'TYPE_MISMATCH');
+    report(state, context, path, 'object', value, 'TYPE_MISMATCH');
+    return;
   }
 
   if (schema.instanceOf !== undefined && shouldEnforceInstanceOf(schema)) {
     if (!(value instanceof schema.instanceOf)) {
-      fail(context, path, instanceOfName(schema.instanceOf), value, 'TYPE_MISMATCH');
+      report(state, context, path, instanceOfName(schema.instanceOf), value, 'TYPE_MISMATCH');
+      return;
     }
   }
 
@@ -284,7 +321,7 @@ function validateObject(
 
     if (!Reflect.has(value, key)) {
       if (property.optional !== true) {
-        fail(context, propertyPath, 'required property', value, 'REQUIRED_PROPERTY');
+        report(state, context, propertyPath, 'required property', value, 'REQUIRED_PROPERTY');
       }
       continue;
     }
@@ -310,7 +347,7 @@ function validateObject(
     }
 
     if (schema.allowExtraProperties !== true && context.allowExtraPropertiesAll !== true) {
-      fail(context, propertyPath, 'no extra properties', value, 'EXTRA_PROPERTY');
+      report(state, context, propertyPath, 'no extra properties', value, 'EXTRA_PROPERTY');
     }
   }
 }
@@ -319,6 +356,7 @@ function validateArrayOwnProperties(
   value: readonly unknown[],
   context: AssertionContext,
   path: string,
+  state: ValidationState,
 ): void {
   if (context.allowExtraPropertiesAll === true) {
     return;
@@ -329,7 +367,7 @@ function validateArrayOwnProperties(
       continue;
     }
 
-    fail(context, appendPropertyPath(path, key), 'no extra properties', value, 'EXTRA_PROPERTY');
+    report(state, context, appendPropertyPath(path, key), 'no extra properties', value, 'EXTRA_PROPERTY');
   }
 }
 
@@ -521,14 +559,15 @@ function matchesTemplateLiteral(pattern: string, value: string): boolean {
   return regex.test(value);
 }
 
-function fail(
+function report(
+  state: ValidationState,
   context: AssertionContext,
   path: string,
   expected: string,
   value: unknown,
   code: StrictTypeErrorInfo['code'],
-): never {
-  throw new StrictTypeError({
+): void {
+  const info: StrictTypeErrorInfo = {
     code,
     ...(context.className === undefined ? {} : { className: context.className }),
     ...(context.functionName === undefined ? {} : { functionName: context.functionName }),
@@ -544,5 +583,12 @@ function fail(
     expected,
     received: receivedName(value),
     operation: context.operation,
-  });
+  };
+
+  if (state.collector !== undefined) {
+    state.collector.push(info);
+    return;
+  }
+
+  throw new StrictTypeError(info);
 }
