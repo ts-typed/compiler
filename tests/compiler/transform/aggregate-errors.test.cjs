@@ -268,3 +268,82 @@ test('a subclass of an @AggregateErrors() DTO is detected through the base-class
   assert.ok(result.paths.some((path) => path.endsWith('.name')), JSON.stringify(result));
   assert.ok(result.paths.some((path) => path.endsWith('.age')), JSON.stringify(result));
 });
+
+test('a generic @AggregateErrors() DTO instantiated as a parameter type is detected (TypeReference unwrap)', () => {
+  const result = runMain({
+    'dto.ts': [
+      "import { AggregateErrors } from '@ts-typed/compiler';",
+      '',
+      '@AggregateErrors()',
+      'export class GenericDto<T> {',
+      '  value: T = 0 as any;',
+      "  name: string = '';",
+      '}',
+    ].join('\n'),
+    'main.ts': [
+      "import { AggregateStrictTypeError } from 'ts-typed';",
+      "import { GenericDto } from './dto';",
+      '',
+      'function createUser(dto: GenericDto<number>): void { /* noop */ }',
+      '',
+      'let caught: any = undefined;',
+      'try {',
+      "  createUser({ value: 'nope', name: 42 } as any);",
+      '} catch (error) {',
+      '  caught = error;',
+      '}',
+      'const results = {',
+      '  isAggregate: caught instanceof AggregateStrictTypeError,',
+      '  errorCount: caught === undefined ? 0 : caught.errors.length,',
+      '  paths: caught === undefined ? [] : caught.errors.map((e: any) => e.propertyPath),',
+      '};',
+      'process.stdout.write(JSON.stringify(results));',
+    ].join('\n'),
+  });
+
+  assert.equal(result.isAggregate, true, JSON.stringify(result));
+  assert.equal(result.errorCount, 2, JSON.stringify(result));
+  assert.ok(result.paths.some((path) => path.endsWith('.value')), JSON.stringify(result));
+  assert.ok(result.paths.some((path) => path.endsWith('.name')), JSON.stringify(result));
+});
+
+test('a subclass of a generic @AggregateErrors() base, instantiated as a parameter type, is detected through the base-class chain', () => {
+  const result = runMain({
+    'dto.ts': [
+      "import { AggregateErrors } from '@ts-typed/compiler';",
+      '',
+      '@AggregateErrors()',
+      'export class GenericBaseDto<T> {',
+      '  value: T = 0 as any;',
+      '}',
+      '',
+      'export class DerivedGenericDto extends GenericBaseDto<number> {',
+      '  age: number = 0;',
+      '}',
+    ].join('\n'),
+    'main.ts': [
+      "import { AggregateStrictTypeError } from 'ts-typed';",
+      "import { DerivedGenericDto } from './dto';",
+      '',
+      'function createUser(dto: DerivedGenericDto): void { /* noop */ }',
+      '',
+      'let caught: any = undefined;',
+      'try {',
+      "  createUser({ value: 'nope', age: 'old' } as any);",
+      '} catch (error) {',
+      '  caught = error;',
+      '}',
+      'const results = {',
+      '  isAggregate: caught instanceof AggregateStrictTypeError,',
+      '  errorCount: caught === undefined ? 0 : caught.errors.length,',
+      '  paths: caught === undefined ? [] : caught.errors.map((e: any) => e.propertyPath),',
+      '};',
+      'process.stdout.write(JSON.stringify(results));',
+    ].join('\n'),
+  });
+
+  assert.equal(result.isAggregate, true, JSON.stringify(result));
+  assert.equal(result.errorCount, 2, JSON.stringify(result));
+  assert.ok(result.paths.some((path) => path.endsWith('.value')), JSON.stringify(result));
+  assert.ok(result.paths.some((path) => path.endsWith('.age')), JSON.stringify(result));
+});

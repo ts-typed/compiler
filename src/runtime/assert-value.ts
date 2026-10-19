@@ -143,6 +143,12 @@ function validateUnion(
   path: string,
   state: ValidationState,
 ): void {
+  for (const candidate of schema.schemas) {
+    if (succeeds(candidate, value, context, path, state)) {
+      return;
+    }
+  }
+
   if (state.collector !== undefined) {
     const soleMatch = selectSoleStructuralMatch(schema, value, state);
     if (soleMatch !== undefined) {
@@ -151,29 +157,26 @@ function validateUnion(
     }
   }
 
-  for (const candidate of schema.schemas) {
-    if (succeeds(candidate, value, context, path, state)) {
-      return;
-    }
-  }
-
   report(state, context, path, 'union', value, 'TYPE_MISMATCH');
 }
 
 /**
- * In collecting mode only: a union member can itself contain many nested
- * violations (an optional/nullable nested DTO), but the normal probe below
- * only ever reports one opaque pass/fail per candidate, in an isolated
- * fail-fast clone — so a nested DTO's own violations never reach the
- * collected list. This looks at the value's actual JS shape (an array, or
- * any other non-null object) and returns the single union member whose
+ * In collecting mode only, and only once the `succeeds()` probe loop above
+ * has already rejected every candidate (so this never overrides a value that
+ * legitimately matches one of them): a failing union member can itself
+ * contain many nested violations (an optional/nullable nested DTO), but the
+ * probe above only ever reports one opaque pass/fail per candidate, in an
+ * isolated fail-fast clone — so a nested DTO's own violations never reach
+ * the collected list. This looks at the value's actual JS shape (an array,
+ * or any other non-null object) and returns the single union member whose
  * resolved kind matches it, so that member's own validation — which may
  * report many violations, at any depth — runs directly against the live
- * collecting state. Returns undefined (falling back to the normal probe,
- * unchanged) for a primitive/null/undefined value, or when more than one
- * member's resolved kind matches (a genuinely ambiguous union) — this is
- * deliberately narrow: it only resolves the common "exactly one
- * object/array-shaped candidate" case, not every possible union shape.
+ * collecting state, for a richer diagnostic on a genuine mismatch. Returns
+ * undefined (falling back to the plain "union" report) for a
+ * primitive/null/undefined value, or when more than one member's resolved
+ * kind matches (a genuinely ambiguous union) — this is deliberately narrow:
+ * it only resolves the common "exactly one object/array-shaped candidate"
+ * case, not every possible union shape.
  */
 function selectSoleStructuralMatch(
   schema: UnionSchema,

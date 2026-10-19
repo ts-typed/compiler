@@ -839,11 +839,23 @@ export class TypeSchemaResolver {
   }
 
   private _hasAggregateErrorsDecorator(type: ts.Type, visited: Set<ts.Type>): boolean {
-    if (visited.has(type) || !type.isClassOrInterface()) {
+    // An instantiated generic (`Dto<number>`) is a `TypeReference`, not
+    // directly a class/interface type, so `isClassOrInterface()` would
+    // otherwise always be false for it — unwrap to the underlying generic
+    // declaration's type first. This also fixes inheritance detection for
+    // `class Derived extends Base<number> {}`, since `getBaseTypes` on
+    // `Derived` likewise yields a `TypeReference` for `Base<number>`.
+    const resolvedType =
+      (type.flags & this._typescript.TypeFlags.Object) !== 0 &&
+      ((type as ts.ObjectType).objectFlags & this._typescript.ObjectFlags.Reference) !== 0
+        ? (type as ts.TypeReference).target
+        : type;
+
+    if (visited.has(resolvedType) || !resolvedType.isClassOrInterface()) {
       return false;
     }
-    visited.add(type);
-    const symbol = type.getSymbol();
+    visited.add(resolvedType);
+    const symbol = resolvedType.getSymbol();
     const ownDeclarations = symbol?.getDeclarations() ?? [];
     const decoratedHere = ownDeclarations.some(
       (declaration) =>
@@ -853,7 +865,7 @@ export class TypeSchemaResolver {
     if (decoratedHere) {
       return true;
     }
-    for (const baseType of this._checker.getBaseTypes(type)) {
+    for (const baseType of this._checker.getBaseTypes(resolvedType)) {
       if (this._hasAggregateErrorsDecorator(baseType, visited)) {
         return true;
       }
@@ -898,13 +910,14 @@ export class TypeSchemaResolver {
    * same as TypeScript's own "go to definition" does.
    */
   private _resolveAliasedDeclarations(symbol: ts.Symbol | undefined): readonly ts.Declaration[] {
+    // `getAliasedSymbol` already follows an entire alias chain in one call —
+    // it returns a non-aliased symbol, or the checker's own `unknownSymbol`
+    // sentinel (which carries no `Alias` flag) when it cannot resolve
+    // further — so a single resolution step is enough; it never leaves an
+    // `Alias`-flagged symbol behind to iterate on again.
     let current = symbol;
-    while (current !== undefined && (current.flags & this._typescript.SymbolFlags.Alias) !== 0) {
-      const aliased = this._checker.getAliasedSymbol(current);
-      if (aliased === current) {
-        break;
-      }
-      current = aliased;
+    if (current !== undefined && (current.flags & this._typescript.SymbolFlags.Alias) !== 0) {
+      current = this._checker.getAliasedSymbol(current);
     }
     return current?.getDeclarations() ?? [];
   }

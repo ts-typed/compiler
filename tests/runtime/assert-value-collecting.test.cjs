@@ -180,6 +180,36 @@ test('assertValueCollecting falls back to one "union" violation when a plain obj
   assert.equal(violations[0].expected, 'union');
 });
 
+test('assertValueCollecting does not force a valid Date through the lone object-shaped union candidate', () => {
+  const profileSchema = {
+    kind: 'object',
+    properties: { bio: { schema: stringSchema } },
+  };
+  const schema = {
+    kind: 'object',
+    properties: {
+      value: { schema: { kind: 'union', schemas: [{ kind: 'date' }, profileSchema] } },
+    },
+  };
+  const violations = assertValueCollecting(schema, { value: new Date('2024-01-01') }, context);
+
+  assert.deepEqual(violations, []);
+});
+
+test('assertValueCollecting does not force a valid tuple through the array-shaped union candidate', () => {
+  const tupleSchema = { kind: 'tuple', items: [numberSchema, numberSchema] };
+  const arraySchema = { kind: 'array', items: stringSchema };
+  const schema = {
+    kind: 'object',
+    properties: {
+      value: { schema: { kind: 'union', schemas: [tupleSchema, arraySchema] } },
+    },
+  };
+  const violations = assertValueCollecting(schema, { value: [1, 2] }, context);
+
+  assert.deepEqual(violations, []);
+});
+
 test('non-collecting (fail-fast) union validation is unaffected by the new collecting-mode branch', () => {
   const profileSchema = {
     kind: 'object',

@@ -117,7 +117,7 @@ Class decorator. Overrides `compiler.strictClass` for one class: `StrictClass()`
 
 ### `AggregateErrors()`
 
-By default ts-typed is fail-fast: the first bad field throws and validation stops there (see [Known limitations](#known-limitations)). A class decorated with `AggregateErrors()` changes that **only at the parameter boundary** — when an instance of it is the value crossing a typed function/method parameter (the DTO-in-an-HTTP-body case), every violation anywhere in it, at any depth, is collected into one `AggregateStrictTypeError` instead:
+By default ts-typed is fail-fast: the first bad field throws and validation stops there (see [Known limitations](#known-limitations)). A class decorated with `AggregateErrors()` changes that **only at the parameter boundary** — when a value crossing a typed function/method parameter is declared as that class (the DTO-in-an-HTTP-body case — the headline case is a plain object literal that was never actually instantiated, as below), every violation anywhere in it, at any depth, is collected into one `AggregateStrictTypeError` instead:
 
 ```ts
 import { AggregateErrors, AggregateStrictTypeError } from '@ts-typed/compiler';
@@ -139,7 +139,9 @@ try {
 }
 ```
 
-This walks every nested object and array to full depth, including an optional or nullable nested DTO (`profile?: Profile`, `profile: Profile | null`) — as long as exactly one non-nullish branch of that field's type is object/array-shaped. A field whose type has two or more genuinely ambiguous object-shaped branches reports one generic violation for that field instead, same as a plain type mismatch would.
+This walks every nested object and array to full depth, including an optional or nullable nested DTO (`profile?: Profile`, `profile: Profile | null`) — as long as exactly one non-nullish branch of that field's type is object/array-shaped. A field whose type has two or more genuinely ambiguous object-shaped branches reports one generic violation for that field instead, same as a plain type mismatch would. A union field with a `Date`, `Map`/`Set`, or tuple member (`profile: Date | Profile`, `items: [number, number] | string[]`) is unaffected by aggregation when the value actually matches that non-object/array-shaped member — it's accepted or rejected exactly as it would be without the decorator.
+
+A few scope boundaries, not yet covered by this first version: an array **parameter**'s own top-level type (`dtos: Dto[]`, as opposed to an array-typed *field* inside an aggregated DTO) is not aggregated — a bad element still stops at the first violation. A namespace-qualified decorator call (`@someNamespace.AggregateErrors()`) is not detected and falls back to ordinary fail-fast validation; import `AggregateErrors` by name instead.
 
 `AggregateStrictTypeError extends StrictTypeError`, so existing `instanceof StrictTypeError` code (including `@ts-typed/nestjs`'s `StrictTypeErrorFilter`) keeps working unchanged — it sees the first violation's fields through the inherited properties, with the full list additionally available as `.errors`. Every other boundary (construction, a field write after construction, variables, returns) stays fail-fast regardless of this decorator — there's no "whole form" to aggregate at a single-field write.
 

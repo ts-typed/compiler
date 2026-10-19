@@ -81,7 +81,24 @@ export function protectValue(
 
   const resolvedForAggregation = resolveReference(prepared.schema, prepared.context);
   const schemaRequestsAggregation =
-    resolvedForAggregation.kind === 'object' && resolvedForAggregation.aggregateErrors === true;
+    (resolvedForAggregation.kind === 'object' && resolvedForAggregation.aggregateErrors === true) ||
+    // The parameter's own declared type can itself be a union (`Dto |
+    // undefined`, `Dto | null`), not just a nested field being optional — in
+    // that case the resolved schema is a UnionSchema, not directly an
+    // ObjectSchema, so the check above alone would miss it. Request
+    // aggregation when exactly one member (after resolving refs) is an
+    // aggregateErrors object schema. Two or more such members in the same
+    // union is a genuinely ambiguous case (which member's violations would
+    // even apply?); this deliberately does not guess, and instead falls back
+    // to the ordinary `isAggregateErrorsEnabled(value)` runtime check below
+    // (which itself typically resolves to fail-fast for a plain object
+    // literal, since there is no runtime-constructed instance to carry that
+    // marker) rather than silently aggregating against the wrong member or
+    // double-counting across members.
+    (resolvedForAggregation.kind === 'union' &&
+      resolvedForAggregation.schemas
+        .map((member) => resolveReference(member, prepared.context))
+        .filter((member) => member.kind === 'object' && member.aggregateErrors === true).length === 1);
 
   if (
     prepared.context.contractKind === 'parameter' &&

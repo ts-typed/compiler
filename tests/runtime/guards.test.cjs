@@ -454,3 +454,63 @@ test('protectValue stays fail-fast for a plain object whose schema has no aggreg
     (error) => error instanceof runtime.StrictTypeError && !(error instanceof runtime.AggregateStrictTypeError),
   );
 });
+
+test('protectValue aggregates a plain object when the PARAMETER\'S OWN schema is a union with one aggregateErrors:true object member (optional/nullable DTO parameter)', () => {
+  // The parameter's own declared type is `CreateUserDto | undefined`, not
+  // just a nested field being optional — so prepared.schema resolves
+  // directly to a UnionSchema, not an ObjectSchema. Previously
+  // schemaRequestsAggregation only ever checked `kind === 'object'` and so
+  // was always false here, silently falling back to fail-fast (worse than
+  // doing nothing: a single opaque "union" TYPE_MISMATCH instead of even a
+  // normal per-field error).
+  const schema = {
+    kind: 'union',
+    schemas: [
+      {
+        kind: 'object',
+        properties: {
+          name: { schema: stringSchema },
+          age: { schema: numberSchema },
+        },
+        aggregateErrors: true,
+      },
+      { kind: 'primitive', name: 'undefined' },
+    ],
+  };
+  const parameterContext = { contractKind: 'parameter', operation: 'argument', propertyPath: 'CreateUserDto' };
+
+  assert.throws(
+    () => guards.protectValue(schema, { name: 42, age: 'old' }, parameterContext),
+    (error) => error instanceof runtime.AggregateStrictTypeError && error.errors.length === 2,
+  );
+});
+
+test('protectValue does not falsely trigger aggregation for a genuinely ambiguous union of two aggregateErrors:true object schemas', () => {
+  // Two different aggregateErrors:true object-shaped members in the same
+  // union: which one's violations would even apply? schemaRequestsAggregation
+  // deliberately does not guess (the filter requires exactly one match), so
+  // this falls back to the ordinary isAggregateErrorsEnabled(value) runtime
+  // check. A plain object literal carries no such runtime marker, so the
+  // net effect here is ordinary fail-fast validation — asserted below: it
+  // still throws (on the union mismatch, since this plain object satisfies
+  // neither branch's required numeric-only `value`/`count` field), but never
+  // as an AggregateStrictTypeError, and the call never throws or hangs from
+  // trying to double-count across both branches.
+  const schemaA = {
+    kind: 'object',
+    properties: { value: { schema: numberSchema } },
+    aggregateErrors: true,
+  };
+  const schemaB = {
+    kind: 'object',
+    properties: { count: { schema: numberSchema } },
+    aggregateErrors: true,
+  };
+  const schema = { kind: 'union', schemas: [schemaA, schemaB] };
+  const parameterContext = { contractKind: 'parameter', operation: 'argument', propertyPath: 'Ambiguous' };
+
+  assert.throws(
+    () => guards.protectValue(schema, { value: 'nope' }, parameterContext),
+    (error) => error instanceof runtime.StrictTypeError && !(error instanceof runtime.AggregateStrictTypeError),
+  );
+});

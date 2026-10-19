@@ -55,5 +55,5 @@ test('toJSON includes every violation alongside the base safe fields, with no ra
 });
 
 test('constructing with an empty list throws, since there is nothing to aggregate', () => {
-  assert.throws(() => new AggregateStrictTypeError([]));
+  assert.throws(() => new AggregateStrictTypeError([]), /at least one violation/);
 });
