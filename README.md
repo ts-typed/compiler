@@ -115,6 +115,32 @@ class LooseConfig { /* accepts any extra key */ }
 
 Class decorator. Overrides `compiler.strictClass` for one class: `StrictClass()` forces nominal (`instanceof`) validation, `StructuralClass()` forces structural (shape-only) validation, regardless of the global default. Inherited by subclasses unless they override it themselves.
 
+### `AggregateErrors()`
+
+By default ts-typed is fail-fast: the first bad field throws and validation stops there (see [Known limitations](#known-limitations)). A class decorated with `AggregateErrors()` changes that **only at the parameter boundary** — when an instance of it is the value crossing a typed function/method parameter (the DTO-in-an-HTTP-body case), every violation anywhere in it, at any depth, is collected into one `AggregateStrictTypeError` instead:
+
+```ts
+import { AggregateErrors, AggregateStrictTypeError } from '@ts-typed/compiler';
+
+@AggregateErrors()
+class CreateUserDto {
+  name: string = '';
+  age: number = 0;
+}
+
+function createUser(dto: CreateUserDto): void { /* ... */ }
+
+try {
+  createUser({ name: 42, age: 'old' } as any);
+} catch (error) {
+  if (error instanceof AggregateStrictTypeError) {
+    console.log(error.errors); // every violation, not just the first
+  }
+}
+```
+
+`AggregateStrictTypeError extends StrictTypeError`, so existing `instanceof StrictTypeError` code (including `@ts-typed/nestjs`'s `StrictTypeErrorFilter`) keeps working unchanged — it sees the first violation's fields through the inherited properties, with the full list additionally available as `.errors`. Every other boundary (construction, a field write after construction, variables, returns) stays fail-fast regardless of this decorator — there's no "whole form" to aggregate at a single-field write.
+
 ### `ServerPopulated()`
 
 Class decorator. Marks a class whose instances are populated by the server/database, not by client input — the intended use is a TypeORM `@Entity()` class. A `StrictTypeError` thrown for one of that class's fields then carries `isServerPopulated: true` (never present in `toJSON()`). This is the compiler-side half of telling an Entity's corrupted field apart from a DTO's bad client input; [`@ts-typed/nestjs`](https://www.npmjs.com/package/@ts-typed/nestjs)'s `StrictTypeErrorFilter` reads this flag to answer HTTP 500 instead of 400.
@@ -193,7 +219,7 @@ If an alias can't be turned into something runtime-resolvable — nothing on dis
 
 These are deliberate, documented scope boundaries, not oversights:
 
-- **Multiple violations aren't aggregated.** ts-typed validates and populates an object field-by-field, throwing on the first bad field — unlike `class-validator`'s "populate everything, then validate the whole object in one pass, collecting every violation" model. If you need every violation in one response, you'll need to keep (or reintroduce) that kind of aggregate validation yourself for now.
+- **Multiple violations aren't aggregated by default**, and aggregation (via [`AggregateErrors()`](#aggregateerrors)) is only available at the parameter boundary — a field write after construction, a variable, or a return value still stops at the first violation, same as ever. A per-field `TypeErrorResponse()` message/status override is also not folded into an `AggregateStrictTypeError`'s fields yet (only the first violation's own fields are, via inheritance) — a future enhancement, not done in this first version.
 - **`WeakMap`/`WeakSet`** are unsupported at the schema level (not just unprotected at runtime) — they can't be iterated, so there's nothing to validate at a boundary crossing.
 - **AMD/UMD/System module output**, and the `let x; export { x };` list form, aren't covered by the CommonJS `exports` guard (ESM needs no equivalent — module namespace objects are already non-writable by spec).
 - **Mutation guards only wrap the boundary-crossing value and its nested containers** at the moment the guard was created or a new value is written through it — a raw reference taken *before* the boundary, or a `Set`'s pre-existing items (which can't be swapped without changing iteration order), bypass the guard.

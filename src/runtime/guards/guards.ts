@@ -1,7 +1,9 @@
+import { isAggregateErrorsEnabled } from '../aggregate-errors.decorator';
+import { AggregateStrictTypeError } from '../aggregate-strict-type-error.class';
 import { isExtraPropertiesAllowed } from '../allow-extra-properties.decorator';
 import { isServerPopulated } from '../server-populated.decorator';
 import { getTypeErrorResponse } from '../type-error-response.decorator';
-import { assertValue } from '../assert-value';
+import { assertValue, assertValueCollecting } from '../assert-value';
 import type { AssertionContext } from '../assertion-context.interface';
 import type {
   ArraySchema,
@@ -77,7 +79,19 @@ export function protectValue(
     return autoConstructValueObject(valueObjectCtor, value, prepared.context);
   }
 
-  assertValue(prepared.schema, value, prepared.context);
+  if (
+    prepared.context.contractKind === 'parameter' &&
+    isReferenceValue(value) &&
+    !Array.isArray(value) &&
+    isAggregateErrorsEnabled(value)
+  ) {
+    const violations = assertValueCollecting(prepared.schema, value, prepared.context);
+    if (violations.length > 0) {
+      throw new AggregateStrictTypeError(violations);
+    }
+  } else {
+    assertValue(prepared.schema, value, prepared.context);
+  }
   installProtection(prepared.schema, value, prepared.context, createProtectionState());
   if (context.enforceMutationGuards === true) {
     if (Array.isArray(value)) {

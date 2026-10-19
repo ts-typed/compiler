@@ -314,3 +314,104 @@ test('property and class extra-property decorators are honored without opening k
   owner.profile = { name: 'Lin', source: 'import' };
   assert.equal(owner.profile.source, 'import');
 });
+
+test('protectValue aggregates every violation for a parameter whose runtime value is an @AggregateErrors() instance', () => {
+  class CreateUserDto {}
+  runtime.AggregateErrors()(CreateUserDto);
+  const schema = {
+    kind: 'object',
+    properties: {
+      name: { schema: stringSchema },
+      age: { schema: numberSchema },
+    },
+  };
+  const parameterContext = { contractKind: 'parameter', operation: 'argument', propertyPath: 'CreateUserDto' };
+  const dto = Object.assign(new CreateUserDto(), { name: 42, age: 'old' });
+
+  assert.throws(
+    () => guards.protectValue(schema, dto, parameterContext),
+    (error) => error instanceof runtime.AggregateStrictTypeError && error.errors.length === 2,
+  );
+});
+
+test('protectValue aggregates even when schema.instanceOf is absent (the realistic cross-file DTO case)', () => {
+  // The compiler only embeds schema.instanceOf when the DTO class is
+  // declared in the same file as the parameter annotation — a DTO imported
+  // from its own file (the normal case) never gets one. Detection must not
+  // depend on it.
+  class CreateUserDto {}
+  runtime.AggregateErrors()(CreateUserDto);
+  const schema = {
+    kind: 'object',
+    properties: {
+      name: { schema: stringSchema },
+      age: { schema: numberSchema },
+    },
+  };
+  const parameterContext = { contractKind: 'parameter', operation: 'argument', propertyPath: 'CreateUserDto' };
+  const dto = Object.assign(new CreateUserDto(), { name: 42, age: 'old' });
+
+  assert.throws(
+    () => guards.protectValue(schema, dto, parameterContext),
+    (error) => error instanceof runtime.AggregateStrictTypeError,
+  );
+});
+
+test('protectValue keeps fail-fast behavior for a parameter whose class has no @AggregateErrors()', () => {
+  class PlainDto {}
+  const schema = {
+    kind: 'object',
+    properties: {
+      name: { schema: stringSchema },
+      age: { schema: numberSchema },
+    },
+  };
+  const parameterContext = { contractKind: 'parameter', operation: 'argument', propertyPath: 'PlainDto' };
+  const dto = Object.assign(new PlainDto(), { name: 42, age: 'old' });
+
+  assert.throws(
+    () => guards.protectValue(schema, dto, parameterContext),
+    (error) => error instanceof runtime.StrictTypeError && !(error instanceof runtime.AggregateStrictTypeError),
+  );
+});
+
+test('protectValue aggregates nested object violations to full depth even without a decorator on the nested class', () => {
+  class CreateUserDto {}
+  runtime.AggregateErrors()(CreateUserDto);
+  const schema = {
+    kind: 'object',
+    properties: {
+      profile: {
+        schema: {
+          kind: 'object',
+          properties: {
+            bio: { schema: stringSchema },
+            age: { schema: numberSchema },
+          },
+        },
+      },
+    },
+  };
+  const parameterContext = { contractKind: 'parameter', operation: 'argument', propertyPath: 'CreateUserDto' };
+  const dto = Object.assign(new CreateUserDto(), { profile: { bio: 7, age: 'old' } });
+
+  assert.throws(
+    () => guards.protectValue(schema, dto, parameterContext),
+    (error) => error instanceof runtime.AggregateStrictTypeError && error.errors.length === 2,
+  );
+});
+
+test('field mutation after construction stays fail-fast even on an @AggregateErrors() instance', () => {
+  class CreateUserDto {
+    constructor() {
+      this.name = '';
+    }
+  }
+  runtime.AggregateErrors()(CreateUserDto);
+  const instance = new CreateUserDto();
+  guards.installFieldGuard(instance, 'name', stringSchema, context, { initialized: true });
+
+  assert.throws(() => {
+    instance.name = 42;
+  }, runtime.StrictTypeError);
+});
