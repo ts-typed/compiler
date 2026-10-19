@@ -3,3 +3,8 @@ dist/
 coverage/
 *.tsbuildinfo
 .DS_Store
+
+# Local planning/progress notes for in-flight work — never committed, so an
+# in-progress session can be resumed by another agent without polluting history.
+.superpowers/
+docs/superpowers/
