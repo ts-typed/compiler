@@ -4,6 +4,16 @@ All notable changes to `@ts-typed/compiler` are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.1.24] - 2026-10-19
+
+### Added
+
+- **`tsconfig.json` `paths` aliases are now resolved and rewritten at build time**, instead of failing the build outright. A project organized with `@app/*` -> `src/*`-style aliases now builds and runs correctly with no separate runtime resolver — the compiler resolves every aliased `import`/`export ... from`/`require()`/dynamic `import()` the same way TypeScript's own checker already does (`ts.resolveModuleName`, so it can never disagree with what type-checked) and rewrites the specifier to a plain relative path, in both the unbundled output and the `ncc`-bundled one (by the time `ncc` sees the file, the import is already an ordinary relative path). See the README's new [Path aliases](./README.md#path-aliases-tsconfigjson-paths) section.
+
+### Changed
+
+- **Replaced the previous "refuse to build at all if `paths` is configured" behavior.** That check existed because TypeScript never rewrites an aliased specifier in its own JS output, and a plain build would silently emit a `require('@app/...')` that fails at runtime with "Cannot find module" — the check is still there, just much narrower now: the build still fails up front, but only for an alias that genuinely can't be turned into something runtime-resolvable (nothing on disk matches it, or it resolves only to a `.d.ts` with no JS behind it), and the error now points at the exact `file:line:column` of each occurrence instead of blocking literally any use of `paths`.
+
 ## [0.1.23] - 2026-10-19
 
 ### Added

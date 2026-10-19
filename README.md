@@ -21,6 +21,7 @@ Full behavior spec: [`docs/SPEC.md`](https://github.com/ts-typed/ts-typed/blob/m
 - [Configuration reference](#configuration-reference)
 - [Decorators](#decorators)
 - [Generics](#generics)
+- [Path aliases (`tsconfig.json` `paths`)](#path-aliases-tsconfigjson-paths)
 - [Known limitations](#known-limitations)
 
 ## How it works
@@ -166,6 +167,27 @@ This also covers:
 - Rest parameters and spread arguments landing in them (`collect<number>(1, 2, 'bad')`, `collect<number>(...mixed)`, and their inferred forms).
 
 If inference can't pin `T` down to anything concrete (no argument references it and no contextual type is available), TypeScript resolves it to `unknown`, and that's treated the same as any other unsupported type: no contract is generated, rather than validating against the wrong thing. A method whose generic declaration lives in one of TypeScript's own bundled lib files (`Array.prototype.map`, `Promise.resolve`, `Map`/`Set`'s own methods, etc.) is deliberately excluded — guarding those would mean instrumenting essentially every array/collection operation in a project, far outside this feature's intended scope of the project's OWN generic functions and classes, and some of those built-ins (`Map`/`Set`) already get their own dedicated, purpose-built handling elsewhere (entry validation, `compiler.enforceMutationGuards`). Generators' yielded values aren't validated either (a generator call produces an iterator, not a single return value).
+
+## Path aliases (`tsconfig.json` `paths`)
+
+A project organized with `paths` aliases (`@app/*` -> `src/*`, and similar) works out of the box — no separate runtime resolver needed:
+
+```json
+{
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": { "@app/*": ["src/*"] }
+  }
+}
+```
+
+```ts
+import { createUser } from '@app/users/create-user';
+```
+
+TypeScript itself never rewrites an aliased specifier in the JavaScript it emits — `paths` only ever affected the type checker and your editor, so a plain `tsc` build (or a bundler that doesn't understand tsconfig `paths`, like `@vercel/ncc`) would emit a literal `require('@app/users/create-user')` that Node can't resolve, failing with "Cannot find module" the first time that line actually runs. The compiler resolves every aliased `import`/`export ... from`/`require()`/dynamic `import()` the same way the checker already does (so it can never disagree with what type-checked) and rewrites it to a plain relative path at build time — in both the unbundled output and the `ncc`-bundled one, since by the time `ncc` sees the file the import is already an ordinary relative path, exactly like one you'd have written by hand.
+
+If an alias can't be turned into something runtime-resolvable — nothing on disk actually matches it, or it resolves only to a `.d.ts` declaration file with no JavaScript behind it — the build fails up front with a precise `file:line:column` pointer per occurrence, instead of silently emitting something that breaks later.
 
 ## Known limitations
 

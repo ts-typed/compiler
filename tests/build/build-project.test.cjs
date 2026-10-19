@@ -364,32 +364,69 @@ const NCC_ENABLED = {
   debugLog: false,
 };
 
-test('a project with tsconfig "paths" fails the build when the bundle (ncc) is disabled', async () => {
+test('a project with tsconfig "paths" builds and runs correctly when the bundle (ncc) is disabled', async () => {
   const projectRoot = writeProject(ALIAS_MAIN_SOURCE);
   enablePathAliases(projectRoot);
   const config = baseConfig(projectRoot);
 
   const report = await buildProject(config);
 
-  assert.equal(report.success, false);
+  assert.equal(report.success, true, report.errors.join('\n'));
   assert.equal(report.bundled, false);
-  assert.equal(report.errors.length, 1);
-  assert.match(report.errors[0], /"paths"/);
-  assert.match(report.errors[0], /tsconfig-paths/);
-  assert.equal(existsSync(join(config.outDir, 'main.js')), false);
+  assert.equal(existsSync(join(config.outDir, 'main.js')), true);
+  // The emitted require() must be relative, not the literal "@app/util" alias Node can't resolve.
+  const emitted = readFileSync(join(config.outDir, 'main.js'), 'utf8');
+  assert.match(emitted, /require\(["']\.\/util["']\)/);
+  assert.doesNotMatch(emitted, /@app\/util/);
+  assert.equal(runEntry(config.outDir).stdout, 'aliased');
 });
 
-test('a project with tsconfig "paths" also fails the build when the bundle (ncc) is enabled, because ncc does not read tsconfig "paths" either', async () => {
-  const projectRoot = writeProject(MAIN_SOURCE);
+test('a project with tsconfig "paths" builds and runs correctly when the bundle (ncc) is enabled too', async () => {
+  const projectRoot = writeProject(ALIAS_MAIN_SOURCE);
   enablePathAliases(projectRoot);
   const config = baseConfig(projectRoot, { ncc: NCC_ENABLED });
 
   const report = await buildProject(config);
 
+  assert.equal(report.success, true, report.errors.join('\n'));
+  assert.equal(report.bundled, true);
+  assert.equal(runEntry(config.outDir, 'index.js').stdout, 'aliased');
+});
+
+test('export-from and `require()`/dynamic `import()` through a "paths" alias are all rewritten too', async () => {
+  const REEXPORT_AND_REQUIRE_SOURCE = [
+    "declare function require(moduleName: string): any;",
+    "export { greeting } from '@app/util';",
+    "const required = require('@app/util').greeting;",
+    "import('@app/util').then((m: any) => {",
+    "  process.stdout.write(`${required}:${m.greeting}`);",
+    "});",
+  ].join('\n');
+  const projectRoot = writeProject(REEXPORT_AND_REQUIRE_SOURCE);
+  enablePathAliases(projectRoot);
+  const config = baseConfig(projectRoot);
+
+  const report = await buildProject(config);
+
+  assert.equal(report.success, true, report.errors.join('\n'));
+  const emitted = readFileSync(join(config.outDir, 'main.js'), 'utf8');
+  assert.doesNotMatch(emitted, /@app\/util/);
+  assert.equal(runEntry(config.outDir).stdout, 'aliased:aliased');
+});
+
+test('a "paths" alias that resolves to nothing on disk fails the build up front, with a precise file:line pointer', async () => {
+  const MISSING_ALIAS_SOURCE = "import { missing } from '@app/does-not-exist';\nprocess.stdout.write(String(missing));\n";
+  const projectRoot = writeProject(MISSING_ALIAS_SOURCE);
+  enablePathAliases(projectRoot);
+  const config = baseConfig(projectRoot);
+
+  const report = await buildProject(config);
+
   assert.equal(report.success, false);
   assert.equal(report.errors.length, 1);
-  assert.match(report.errors[0], /"paths"/);
-  assert.match(report.errors[0], /ncc-bundled output/);
+  assert.match(report.errors[0], /main\.ts:1:/);
+  assert.match(report.errors[0], /@app\/does-not-exist/);
+  assert.equal(existsSync(join(config.outDir, 'main.js')), false);
 });
 
 test('a project without tsconfig "paths" still builds when the bundle (ncc) is disabled', async () => {

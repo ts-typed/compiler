@@ -4,6 +4,7 @@ import type { ContractDescriptor, CoverageDiagnostic } from '../analysis';
 import type { Schema } from '../../runtime';
 import type { ContractTransformerOptions } from './contract-transformer-options.interface';
 import { createSchemaExpression } from './schema-expression';
+import { rewriteAliasedSpecifier } from './resolve-path-alias';
 
 const DEFAULT_RUNTIME_MODULE = '@ts-typed/compiler';
 const LEGACY_RUNTIME_MODULE = 'ts-typed';
@@ -2546,16 +2547,29 @@ function visitImportDeclaration(
   context: ts.TransformationContext,
 ): ts.ImportDeclaration {
   const visited = typescript.visitEachChild(node, visitor, context) as ts.ImportDeclaration;
-  if (!shouldRewriteModule(typescript, visited.moduleSpecifier, state)) {
+  if (shouldRewriteModule(typescript, visited.moduleSpecifier, state)) {
+    return factory.updateImportDeclaration(
+      visited,
+      visited.modifiers,
+      visited.importClause,
+      factory.createStringLiteral(state.runtimeModule),
+      visited.attributes,
+    );
+  }
+  if (!typescript.isStringLiteral(visited.moduleSpecifier)) {
     return visited;
   }
-  return factory.updateImportDeclaration(
-    visited,
-    visited.modifiers,
-    visited.importClause,
-    factory.createStringLiteral(state.runtimeModule),
-    visited.attributes,
+  const aliasedSpecifier = rewriteAliasedSpecifier(
+    typescript,
+    factory,
+    optionsForState(state).analysis.program.getCompilerOptions(),
+    visited.moduleSpecifier,
+    state.sourceFile.fileName,
   );
+  if (aliasedSpecifier === visited.moduleSpecifier) {
+    return visited;
+  }
+  return factory.updateImportDeclaration(visited, visited.modifiers, visited.importClause, aliasedSpecifier, visited.attributes);
 }
 
 function visitExportDeclaration(
@@ -2567,17 +2581,33 @@ function visitExportDeclaration(
   context: ts.TransformationContext,
 ): ts.ExportDeclaration {
   const visited = typescript.visitEachChild(node, visitor, context) as ts.ExportDeclaration;
-  if (visited.moduleSpecifier === undefined || !shouldRewriteModule(typescript, visited.moduleSpecifier, state)) {
+  if (visited.moduleSpecifier === undefined) {
     return visited;
   }
-  return factory.updateExportDeclaration(
-    visited,
-    visited.modifiers,
-    visited.isTypeOnly,
-    visited.exportClause,
-    factory.createStringLiteral(state.runtimeModule),
-    visited.attributes,
+  if (shouldRewriteModule(typescript, visited.moduleSpecifier, state)) {
+    return factory.updateExportDeclaration(
+      visited,
+      visited.modifiers,
+      visited.isTypeOnly,
+      visited.exportClause,
+      factory.createStringLiteral(state.runtimeModule),
+      visited.attributes,
+    );
+  }
+  if (!typescript.isStringLiteral(visited.moduleSpecifier)) {
+    return visited;
+  }
+  const aliasedSpecifier = rewriteAliasedSpecifier(
+    typescript,
+    factory,
+    optionsForState(state).analysis.program.getCompilerOptions(),
+    visited.moduleSpecifier,
+    state.sourceFile.fileName,
   );
+  if (aliasedSpecifier === visited.moduleSpecifier) {
+    return visited;
+  }
+  return factory.updateExportDeclaration(visited, visited.modifiers, visited.isTypeOnly, visited.exportClause, aliasedSpecifier, visited.attributes);
 }
 
 function visitImportEqualsDeclaration(
@@ -2592,9 +2622,29 @@ function visitImportEqualsDeclaration(
   if (
     !typescript.isExternalModuleReference(visited.moduleReference) ||
     visited.moduleReference.expression === undefined ||
-    !shouldRewriteModule(typescript, visited.moduleReference.expression, state)
+    !typescript.isStringLiteral(visited.moduleReference.expression)
   ) {
     return visited;
+  }
+  const specifier = visited.moduleReference.expression;
+  if (!shouldRewriteModule(typescript, specifier, state)) {
+    const aliasedSpecifier = rewriteAliasedSpecifier(
+      typescript,
+      factory,
+      optionsForState(state).analysis.program.getCompilerOptions(),
+      specifier,
+      state.sourceFile.fileName,
+    );
+    if (aliasedSpecifier === specifier) {
+      return visited;
+    }
+    return factory.updateImportEqualsDeclaration(
+      visited,
+      visited.modifiers,
+      visited.isTypeOnly,
+      visited.name,
+      factory.createExternalModuleReference(aliasedSpecifier),
+    );
   }
   return factory.updateImportEqualsDeclaration(
     visited,
@@ -2755,26 +2805,39 @@ function guardGenericConstruct(
   );
 }
 
+/** `require('...')` and dynamic `import('...')` calls: rewrites the ts-typed runtime alias and, separately, any `paths` alias. */
 function rewriteRuntimeRequire(
   visited: ts.CallExpression,
   state: FileTransformState,
   factory: ts.NodeFactory,
   typescript: typeof import('typescript'),
 ): ts.CallExpression {
-  if (
-    !typescript.isIdentifier(visited.expression) ||
-    visited.expression.text !== 'require' ||
-    visited.arguments.length !== 1 ||
-    !shouldRewriteModule(typescript, visited.arguments[0], state)
-  ) {
+  const isRequireCall = typescript.isIdentifier(visited.expression) && visited.expression.text === 'require';
+  const isDynamicImport = visited.expression.kind === typescript.SyntaxKind.ImportKeyword;
+  if ((!isRequireCall && !isDynamicImport) || visited.arguments.length < 1 || !typescript.isStringLiteral(visited.arguments[0])) {
     return visited;
   }
-  return factory.updateCallExpression(
-    visited,
-    visited.expression,
-    visited.typeArguments,
-    [factory.createStringLiteral(state.runtimeModule)],
+  const specifier = visited.arguments[0];
+  if (isRequireCall && shouldRewriteModule(typescript, specifier, state)) {
+    return factory.updateCallExpression(visited, visited.expression, visited.typeArguments, [
+      factory.createStringLiteral(state.runtimeModule),
+      ...visited.arguments.slice(1),
+    ]);
+  }
+  const aliasedSpecifier = rewriteAliasedSpecifier(
+    typescript,
+    factory,
+    optionsForState(state).analysis.program.getCompilerOptions(),
+    specifier,
+    state.sourceFile.fileName,
   );
+  if (aliasedSpecifier === specifier) {
+    return visited;
+  }
+  return factory.updateCallExpression(visited, visited.expression, visited.typeArguments, [
+    aliasedSpecifier,
+    ...visited.arguments.slice(1),
+  ]);
 }
 
 /**

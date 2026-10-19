@@ -11,18 +11,12 @@ import type { ProjectConfig } from '../../config';
 import { resolveProject } from '../../integration';
 import { createCoverageReport, formatCoverageReport } from '../report';
 import { createContractTransformer } from '../transform';
+import { findUnresolvableAliasedSpecifiers } from '../transform/resolve-path-alias';
 import { formatBuildMetrics, isBuildMetricsEnabled, now } from './build-metrics';
 import type { BuildStageMetrics } from './build-metrics';
 import type { BuildAssetReport, BuildReport } from './build-report.interface';
 
 const RUNTIME_PACKAGE = '@ts-typed/compiler';
-
-const PATH_ALIASES_ERROR =
-  'This project configures "paths" in tsconfig.json (e.g. module aliases), which TypeScript never rewrites in its ' +
-  'own emitted JavaScript: any import/require written through an alias would fail at runtime with "Cannot find ' +
-  'module", in both the unbundled and the ncc-bundled output (@vercel/ncc does not read tsconfig "paths" either). ' +
-  'Resolve the aliases before they reach ts-typed: use a runtime resolver such as tsconfig-paths, or remove the ' +
-  '"paths" aliases (e.g. by rewriting imports to relative paths) and build again.';
 
 interface EmitFileRecord {
   readonly relativePath: string;
@@ -49,12 +43,16 @@ export async function buildProject(config: ProjectConfig): Promise<BuildReport> 
     ]);
   }
 
-  // TypeScript never rewrites path aliases in the JavaScript it emits, so a
-  // project that uses "paths" would report success while failing at runtime
-  // with "Cannot find module" — in both the unbundled output AND the
-  // ncc-bundled one, since @vercel/ncc does not read tsconfig "paths" either.
-  if (hasPathAliases(analysis.program.getCompilerOptions())) {
-    return failure(config.outDir, [PATH_ALIASES_ERROR]);
+  // TypeScript never rewrites path aliases in the JavaScript it emits, so the contract
+  // transformer rewrites each aliased specifier to a relative one at emit time (see
+  // resolve-path-alias.ts) — this runs first to fail the build up front, with a precise
+  // file:line pointer per occurrence, for any alias that cannot be turned into something
+  // require()/import() can actually load (nothing on disk resolves it, or it resolves only to a
+  // .d.ts with no runtime module behind it), instead of emitting JavaScript that would fail at
+  // runtime with "Cannot find module" the first time that import path actually executes.
+  const unresolvableAliases = findUnresolvableAliasedSpecifiers(analysis.typescript, analysis.program, isOutsideProject);
+  if (unresolvableAliases.length > 0) {
+    return failure(config.outDir, unresolvableAliases);
   }
 
   const entrySourceFile = analysis.program.getSourceFile(resolve(config.entry));
@@ -236,10 +234,6 @@ function resolveIntegrationConfig(config: ProjectConfig): ProjectConfig {
     ...config,
     tsconfig: project.configPath ?? config.tsconfig,
   };
-}
-
-function hasPathAliases(compilerOptions: ts.CompilerOptions): boolean {
-  return Object.keys(compilerOptions.paths ?? {}).length > 0;
 }
 
 function failure(
