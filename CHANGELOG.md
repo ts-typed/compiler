@@ -4,6 +4,13 @@ All notable changes to `@ts-typed/compiler` are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.1.27] - 2026-10-19
+
+### Fixed
+
+- **`@AggregateErrors()` now works when the DTO is populated field-by-field after construction**, which is what `class-transformer`'s `plainToInstance` does and therefore what Nest's `ValidationPipe({ transform: true })` does. Previously the decorator had no effect in that path: the first invalid field write threw immediately, so the caller got a single `StrictTypeError` instead of the aggregated list. A decorated instance now opens a per-instance "aggregate window" at construction; field writes made while it is open collect instead of throwing, and the window closes — merging the collected violations with a full structural check, including a missing required field or an undeclared extra key — the first time the instance crosses a real parameter boundary.
+- Known limitation: a decorated instance that is constructed and then only ever mutated by application code, never passed through a typed parameter, never closes its window. Field-write protection is effectively suspended on that instance from then on. `@AggregateErrors()` is intended for DTO-style classes that are freshly constructed and validated at a parameter boundary; see the README's [`AggregateErrors()`](./README.md#aggregateerrors) section.
+
 ## [0.1.26] - 2026-10-19
 
 ### Added
