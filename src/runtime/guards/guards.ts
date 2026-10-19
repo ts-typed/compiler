@@ -1112,6 +1112,27 @@ function installObjectProtection(
     );
     const installedGuard = getInstalledGuard(value, key);
     if (installedGuard !== undefined) {
+      // A value can flow through more than one binding typed by effectively
+      // the same requirement for this field — e.g. a class instance's own
+      // property-level contract (installed once, in its constructor) and a
+      // local variable later holding that same instance (`const dto = new
+      // Dto(); ...`), which `installProtection` re-protects through this
+      // same function, for every binding the instance ever flows through.
+      // When the incoming schema for this field is simple enough to compare
+      // structurally (see `dropRedundantFieldContracts`) and an already-
+      // installed contract describes the exact same requirement, keeping
+      // BOTH would be pure duplication: every future write would be checked
+      // — and, with an aggregate window open, REPORTED — twice for the
+      // exact same failure. So the stale, redundant contract is dropped in
+      // favor of this one (the freshest binding this value flowed through,
+      // and so the most locally relevant one for error reporting) rather
+      // than kept alongside it — the field ends up with exactly one
+      // contract for that requirement, same as before this value ever
+      // flowed through a second binding. A field whose schema differs (or
+      // is too structurally rich to safely compare, e.g. a nested
+      // object/array/union) still goes through the normal path below,
+      // unchanged — its new contract is simply added, same as today.
+      dropRedundantFieldContracts(installedGuard, property.schema);
       addContractAndProtect(
         installedGuard,
         property.schema,
@@ -1174,6 +1195,79 @@ function installObjectProtection(
       propertyContext,
       state,
     );
+  }
+}
+
+/**
+ * Removes, in place, any contract already in `installedGuard` whose schema
+ * is structurally identical to `schema` — meaning the caller is about to add
+ * a new contract that describes the exact same requirement an existing one
+ * already does, for the exact same field. Dropping the stale one first (so
+ * the caller's `addContract` then adds the fresh one in its place) keeps the
+ * field at exactly one contract for that requirement, rather than
+ * accumulating a new, functionally-identical contract every time the value
+ * flows through another binding (`const dto = new Dto(); ...`, a function
+ * parameter, and so on — see `installObjectProtection`'s call site). Only
+ * schemas simple enough to compare safely (see
+ * {@link isSimpleComparableSchema}) are considered; anything richer (a
+ * nested object, array, union, and so on) is left untouched, which is
+ * exactly today's pre-existing behavior (a new contract is always added
+ * alongside whatever is already there) — this never drops more than it can
+ * safely verify is truly redundant.
+ */
+function dropRedundantFieldContracts(
+  installedGuard: DataPropertyGuardState,
+  schema: Schema,
+): void {
+  if (!isSimpleComparableSchema(schema)) {
+    return;
+  }
+  const kept = installedGuard.contracts.filter(
+    (existing) => !(isSimpleComparableSchema(existing.schema) && schemasStructurallyEqual(existing.schema, schema)),
+  );
+  installedGuard.contracts.length = 0;
+  installedGuard.contracts.push(...kept);
+}
+
+function isSimpleComparableSchema(schema: Schema): boolean {
+  switch (schema.kind) {
+    case 'primitive':
+    case 'literal':
+    case 'date':
+    case 'unknown':
+    case 'never':
+    case 'templateLiteral':
+      return true;
+    default:
+      return false;
+  }
+}
+
+/**
+ * Structural equality for the simple schema kinds {@link isSimpleComparableSchema}
+ * allows through. Deliberately not a generic deep-equal (a `literal` schema's
+ * value can be a `bigint`, which `JSON.stringify` cannot serialize) and
+ * deliberately not extended to richer kinds like `object`/`array` — those can
+ * embed live function references (`instanceOf`, `valueObjectCtor`) that are
+ * not meaningfully comparable this way.
+ */
+function schemasStructurallyEqual(a: Schema, b: Schema): boolean {
+  if (a.kind !== b.kind) {
+    return false;
+  }
+  switch (a.kind) {
+    case 'primitive':
+      return b.kind === 'primitive' && a.name === b.name;
+    case 'literal':
+      return b.kind === 'literal' && a.value === b.value;
+    case 'templateLiteral':
+      return b.kind === 'templateLiteral' && a.pattern === b.pattern;
+    case 'date':
+    case 'unknown':
+    case 'never':
+      return true;
+    default:
+      return false;
   }
 }
 

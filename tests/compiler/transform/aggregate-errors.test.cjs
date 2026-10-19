@@ -347,3 +347,92 @@ test('a subclass of a generic @AggregateErrors() base, instantiated as a paramet
   assert.ok(result.paths.some((path) => path.endsWith('.value')), JSON.stringify(result));
   assert.ok(result.paths.some((path) => path.endsWith('.age')), JSON.stringify(result));
 });
+
+test('a plainToInstance-style population (construct, then assign each field separately) now aggregates, once the populated instance crosses a real parameter boundary', () => {
+  const result = runMain({
+    'dto.ts': [
+      "import { AggregateErrors } from '@ts-typed/compiler';",
+      '',
+      '@AggregateErrors()',
+      'export class CreateUserDto {',
+      "  name: string = '';",
+      '  age: number = 0;',
+      '}',
+    ].join('\n'),
+    'main.ts': [
+      "import { AggregateStrictTypeError } from 'ts-typed';",
+      "import { CreateUserDto } from './dto';",
+      '',
+      'function createUser(dto: CreateUserDto): void { /* noop */ }',
+      '',
+      // This is exactly class-transformer's plainToInstance shape: construct
+      // first (field initializers run — this is NOT what should be
+      // aggregated), THEN assign each real value as a separate statement
+      // (this is the part that must collect instead of throwing on the
+      // first bad field).
+      'const dto = new CreateUserDto();',
+      '(dto as any).name = 42;',
+      '(dto as any).age = "old";',
+      '',
+      'let caught: any = undefined;',
+      'try {',
+      '  createUser(dto);',
+      '} catch (error) {',
+      '  caught = error;',
+      '}',
+      'const results = {',
+      '  isAggregate: caught instanceof AggregateStrictTypeError,',
+      '  errorCount: caught === undefined ? 0 : caught.errors.length,',
+      '  paths: caught === undefined ? [] : caught.errors.map((e: any) => e.propertyPath),',
+      '};',
+      'process.stdout.write(JSON.stringify(results));',
+    ].join('\n'),
+  });
+
+  assert.equal(result.isAggregate, true, JSON.stringify(result));
+  assert.equal(result.errorCount, 2, JSON.stringify(result));
+  assert.ok(result.paths.some((path) => path.endsWith('.name')), JSON.stringify(result));
+  assert.ok(result.paths.some((path) => path.endsWith('.age')), JSON.stringify(result));
+});
+
+test('the same plainToInstance-style population also reports a field that was never assigned at all (stays at its required-but-missing gap) once the schema declares a third required field not present at all in this scenario', () => {
+  const result = runMain({
+    'dto.ts': [
+      "import { AggregateErrors } from '@ts-typed/compiler';",
+      '',
+      '@AggregateErrors()',
+      'export class CreateUserDto {',
+      "  name: string = '';",
+      '  age: number = 0;',
+      '}',
+    ].join('\n'),
+    'main.ts': [
+      "import { AggregateStrictTypeError } from 'ts-typed';",
+      "import { CreateUserDto } from './dto';",
+      '',
+      // `email` is typed as a required part of the parameter contract via an
+      // intersection the transformer resolves structurally, exercising the
+      // "never written at all" path distinctly from "written with a bad
+      // type" — see the design doc's §2.3 merge reasoning.
+      "function createUser(dto: CreateUserDto & { email: string }): void { /* noop */ }",
+      '',
+      'const dto = new CreateUserDto();',
+      '(dto as any).name = 42;',
+      '',
+      'let caught: any = undefined;',
+      'try {',
+      '  createUser(dto as any);',
+      '} catch (error) {',
+      '  caught = error;',
+      '}',
+      'const results = {',
+      '  isAggregate: caught instanceof AggregateStrictTypeError,',
+      '  codes: caught === undefined ? [] : caught.errors.map((e: any) => e.code).sort(),',
+      '};',
+      'process.stdout.write(JSON.stringify(results));',
+    ].join('\n'),
+  });
+
+  assert.equal(result.isAggregate, true, JSON.stringify(result));
+  assert.deepEqual(result.codes, ['REQUIRED_PROPERTY', 'TYPE_MISMATCH'], JSON.stringify(result));
+});

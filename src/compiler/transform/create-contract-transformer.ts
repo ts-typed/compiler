@@ -1071,7 +1071,7 @@ function visitClassMembers(
     ...guards.map((guard) => createInstallFieldGuard(factory, state, guard)),
     ...privateInitStatements,
   ];
-  const requiredFieldLockStatements = createRequiredFieldFinalizeStatements(node, guards, state, factory, typescript);
+  const requiredFieldLockStatements = createMostDerivedConstructionStatements(node, guards, state, factory, typescript);
   // The seal must come last: every field guard is installed and every lock
   // above has run before the instance stops accepting new properties.
   const lockStatements = [
@@ -1103,34 +1103,66 @@ function visitClassMembers(
 }
 
 /**
- * Builds the (possibly empty) one-statement block that finalizes required
- * fields against `delete`/`Object.defineProperty` for this class, guarded
- * by `new.target === <className>` so it only fires once construction has
- * reached the most-derived class — see {@link createNewTargetIsClassCheck}.
+ * Builds the (possibly empty) one-statement block that runs once
+ * construction has reached the most-derived class — guarded by
+ * `new.target === <className>`, see {@link createNewTargetIsClassCheck}.
+ * Originally just the required-field `delete`/`Object.defineProperty`
+ * finalization; now also where `beginAggregateWindow(this)` is emitted,
+ * unconditionally whenever this class has at least one protected field of
+ * its own (regardless of whether any of them are `required`) — the runtime
+ * function itself is a no-op unless the class is `@AggregateErrors()`-
+ * decorated, so this costs one extra call on construction for every class
+ * with at least one protected field, decorated or not.
+ *
  * Anonymous class expressions have no name to compare `new.target` against
  * and are a rare pattern in practice (NestJS/TypeORM classes are always
- * named), so this is skipped for them: their required fields simply keep
- * the same `configurable: true` behavior as before this feature existed,
- * rather than risk comparing `new.target` against nothing meaningful.
+ * named), so this whole block is skipped for them — their required fields
+ * keep the same `configurable: true` behavior as before that feature
+ * existed, and `@AggregateErrors()` has no effect on them either.
+ *
+ * Known scope boundary: a subclass that declares no fields of its own
+ * (`guards.length === 0` for THAT class, even though it may inherit
+ * protected fields from an `@AggregateErrors()`-decorated base) does not
+ * get its own `beginAggregateWindow` call, because this function is never
+ * invoked for it in the first place (see the `guards.length === 0` early
+ * return in `visitClassMembers`, unchanged). The base class's own call is
+ * guarded by `new.target === BaseClassName`, which is false when
+ * constructing the subclass. See the design doc §2.5.
  */
-function createRequiredFieldFinalizeStatements(
+function createMostDerivedConstructionStatements(
   node: ts.ClassLikeDeclaration,
   guards: readonly FieldGuard[],
   state: FileTransformState,
   factory: ts.NodeFactory,
   typescript: typeof import('typescript'),
 ): readonly ts.Statement[] {
-  const requiredGuards = guards.filter((guard) => guard.requiredField);
-  if (requiredGuards.length === 0 || node.name === undefined) {
+  if (guards.length === 0 || node.name === undefined) {
     return [];
   }
-  const lockCalls = requiredGuards.map((guard) => createLockRequiredFieldCall(factory, state, guard));
+  const requiredGuards = guards.filter((guard) => guard.requiredField);
+  const statements: ts.Statement[] = [
+    ...requiredGuards.map((guard) => createLockRequiredFieldCall(factory, state, guard)),
+    createBeginAggregateWindowCall(factory, state),
+  ];
   return [
     factory.createIfStatement(
       createNewTargetIsClassCheck(factory, typescript, node.name),
-      factory.createBlock(lockCalls, true),
+      factory.createBlock(statements, true),
     ),
   ];
+}
+
+function createBeginAggregateWindowCall(
+  factory: ts.NodeFactory,
+  state: FileTransformState,
+): ts.Statement {
+  return factory.createExpressionStatement(
+    factory.createCallExpression(
+      factory.createPropertyAccessExpression(state.runtimeIdentifier, 'beginAggregateWindow'),
+      undefined,
+      [factory.createThis()],
+    ),
+  );
 }
 
 /**
