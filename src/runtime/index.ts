@@ -11,6 +11,7 @@ export { AggregateErrors, isAggregateErrorsEnabled } from './aggregate-errors.de
 export {
   beginAggregateWindow,
   collectIfAggregating,
+  isAggregating,
   takeAggregateWindowViolations,
 } from './aggregate-window';
 export { TypeErrorResponse, getTypeErrorResponse } from './type-error-response.decorator';

@@ -28,6 +28,20 @@ export function beginAggregateWindow(instance: object): void {
 }
 
 /**
+ * Returns `true` when a window is currently open for `instance` — i.e. a
+ * prior `beginAggregateWindow(instance)` call has not yet been matched by
+ * `takeAggregateWindowViolations(instance)`. Callers on a hot path (such as
+ * `setGuardedValue` in guards.ts) use this to decide, once and up front,
+ * whether to take the collecting path at all, rather than always running the
+ * non-throwing collecting check and then deciding what to do with its
+ * result — the latter would change observable behavior (re-reading getters,
+ * extra traversal cost) even when no window is open.
+ */
+export function isAggregating(instance: object): boolean {
+  return windows.has(instance);
+}
+
+/**
  * If a window is open for `instance`, records `violation` in it and returns
  * `true` — the caller must NOT throw and must NOT store the value that
  * produced this violation (the field keeps whatever it already held).

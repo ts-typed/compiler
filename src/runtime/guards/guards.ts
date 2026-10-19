@@ -4,7 +4,7 @@ import { isExtraPropertiesAllowed } from '../allow-extra-properties.decorator';
 import { isServerPopulated } from '../server-populated.decorator';
 import { getTypeErrorResponse } from '../type-error-response.decorator';
 import { assertValue, assertValueCollecting } from '../assert-value';
-import { collectIfAggregating } from '../aggregate-window';
+import { collectIfAggregating, isAggregating } from '../aggregate-window';
 import type { AssertionContext } from '../assertion-context.interface';
 import type {
   ArraySchema,
@@ -1432,6 +1432,8 @@ function setGuardedValue(state: DataPropertyGuardState, value: unknown, owner: o
 
   // A ValueObject-typed field stores the constructed instance, not the raw
   // value that was written. The first such contract decides the constructor.
+  // ValueObject fields are not yet covered by the aggregate window below —
+  // Task 4 decides whether (and how) they need to be.
   let stored: unknown = value;
   for (const prepared of preparedContracts) {
     const valueObjectCtor = valueObjectCtorOf(prepared.schema, prepared.context);
@@ -1441,31 +1443,51 @@ function setGuardedValue(state: DataPropertyGuardState, value: unknown, owner: o
     }
   }
 
-  // Non-throwing pass first: an open aggregate window (Task 1) means a
-  // failing contract must collect, not throw — but ANY failing contract for
-  // this write means the whole write is rejected (matching fail-fast's "an
-  // invalid write never gets stored"), so every contract is checked before
-  // deciding whether to proceed, instead of validating and storing
-  // incrementally.
-  let rejected = false;
-  for (const prepared of preparedContracts) {
-    const target = valueObjectCtorOf(prepared.schema, prepared.context) !== undefined ? stored : value;
-    const violations = assertValueCollecting(prepared.schema, target, prepared.context);
-    if (violations.length === 0) {
-      continue;
+  // The window check happens once, up front, and decides which loop runs —
+  // never both. Running the non-throwing `assertValueCollecting` pass
+  // unconditionally (even with no window open) would change observable
+  // behavior for every instance today: it re-reads property getters an
+  // extra time (visible for a throwing or side-effecting getter, and able to
+  // silently turn a rejected write into a stored one when a getter's value
+  // changes between reads), and it pays full-collection traversal cost
+  // (e.g. building a violation per element of a huge invalid array) where
+  // fail-fast would have stopped at the first failure. So when no window is
+  // open — true for every instance until Task 4 wires construction to open
+  // one — this takes the exact original loop, byte-for-byte.
+  if (!isAggregating(owner)) {
+    for (const prepared of preparedContracts) {
+      if (valueObjectCtorOf(prepared.schema, prepared.context) !== undefined) {
+        assertValue(prepared.schema, stored, prepared.context);
+        continue;
+      }
+      assertValue(prepared.schema, value, prepared.context);
     }
-    if (collectIfAggregating(owner, violations[0])) {
-      rejected = true;
-      continue;
+  } else {
+    // A window is open: collect violations instead of throwing — but ANY
+    // failing contract for this write means the whole write is rejected
+    // (matching fail-fast's "an invalid write never gets stored"), so every
+    // contract is checked before deciding whether to proceed, instead of
+    // validating and storing incrementally.
+    let rejected = false;
+    for (const prepared of preparedContracts) {
+      const target = valueObjectCtorOf(prepared.schema, prepared.context) !== undefined ? stored : value;
+      const violations = assertValueCollecting(prepared.schema, target, prepared.context);
+      if (violations.length === 0) {
+        continue;
+      }
+      if (collectIfAggregating(owner, violations[0])) {
+        rejected = true;
+        continue;
+      }
+      // The window closed between the isAggregating check above and here —
+      // not reachable today (nothing synchronous in between can close it),
+      // but if it ever happens, fall back to the fail-fast throw rather than
+      // silently proceeding.
+      assertValue(prepared.schema, target, prepared.context);
     }
-    // No window open: fall back to today's exact fail-fast behavior — throw
-    // the first violation immediately, via the same assertValue path as
-    // before this change (not a hand-built StrictTypeError, so its shape is
-    // byte-identical to what assertValue would have thrown here).
-    assertValue(prepared.schema, target, prepared.context);
-  }
-  if (rejected) {
-    return;
+    if (rejected) {
+      return;
+    }
   }
 
   for (const prepared of preparedContracts) {

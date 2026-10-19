@@ -521,7 +521,6 @@ test('a field write on an instance with NO open aggregate window still throws im
       this.name = '';
     }
   }
-  const schema = { kind: 'object', properties: { name: { schema: stringSchema } }, instanceOf: PlainDto };
   const instance = new PlainDto();
   guards.installFieldGuard(instance, 'name', stringSchema, context, { initialized: true });
 
@@ -586,4 +585,46 @@ test('once the window is closed (takeAggregateWindowViolations called), a later 
   assert.throws(() => {
     instance.name = 42;
   }, (error) => error instanceof runtime.StrictTypeError && !(error instanceof runtime.AggregateStrictTypeError));
+});
+
+test('a property with multiple contracts (shared reference) that have DIFFERENT contexts surfaces the first contract on the no-window path, and collects every contract on the open-window path', () => {
+  class Dto {
+    constructor() {
+      this.value = 1;
+    }
+  }
+  runtime.AggregateErrors()(Dto);
+  const instance = new Dto();
+  const firstContext = { ...context, propertyPath: 'First.value' };
+  const secondContext = { ...context, propertyPath: 'Second.value' };
+  // Composes two contracts on the same property, like the
+  // "reinstalling a field guard composes contracts" test above, but with
+  // distinct propertyPaths in each contract's own context instead of a
+  // shared one.
+  guards.installFieldGuard(instance, 'value', numberSchema, firstContext, { initialized: true });
+  guards.installFieldGuard(instance, 'value', numberSchema, secondContext, { initialized: true });
+
+  // No-window (fail-fast): the FIRST contract's propertyPath/expected are
+  // what surfaces in the thrown error, since the loop stops there.
+  assert.throws(() => {
+    instance.value = 'not a number';
+  }, (error) =>
+    error instanceof runtime.StrictTypeError &&
+    error.propertyPath === 'First.value' &&
+    typeof error.expected === 'string');
+  assert.equal(instance.value, 1, 'the rejected write did not change the field');
+
+  // Open-window: both contracts' violations are collected, and the value is
+  // not stored.
+  runtime.beginAggregateWindow(instance);
+  assert.doesNotThrow(() => {
+    instance.value = 'not a number';
+  });
+  assert.equal(instance.value, 1, 'the rejected write did not change the field');
+  const violations = runtime.takeAggregateWindowViolations(instance);
+  assert.equal(violations.length, 2);
+  assert.deepEqual(
+    violations.map((violation) => violation.propertyPath).sort(),
+    ['First.value', 'Second.value'],
+  );
 });
