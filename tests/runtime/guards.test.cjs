@@ -514,3 +514,76 @@ test('protectValue does not falsely trigger aggregation for a genuinely ambiguou
     (error) => error instanceof runtime.StrictTypeError && !(error instanceof runtime.AggregateStrictTypeError),
   );
 });
+
+test('a field write on an instance with NO open aggregate window still throws immediately, unchanged (the default, fail-fast path)', () => {
+  class PlainDto {
+    constructor() {
+      this.name = '';
+    }
+  }
+  const schema = { kind: 'object', properties: { name: { schema: stringSchema } }, instanceOf: PlainDto };
+  const instance = new PlainDto();
+  guards.installFieldGuard(instance, 'name', stringSchema, context, { initialized: true });
+
+  assert.throws(() => {
+    instance.name = 42;
+  }, (error) => error instanceof runtime.StrictTypeError && !(error instanceof runtime.AggregateStrictTypeError));
+  // The rejected write did not change the field.
+  assert.equal(instance.name, '');
+});
+
+test('a field write on an instance with an OPEN aggregate window collects instead of throwing, and keeps the field\'s old value', () => {
+  class Dto {
+    constructor() {
+      this.name = '';
+    }
+  }
+  runtime.AggregateErrors()(Dto);
+  const instance = new Dto();
+  guards.installFieldGuard(instance, 'name', stringSchema, context, { initialized: true });
+  runtime.beginAggregateWindow(instance);
+
+  assert.doesNotThrow(() => {
+    instance.name = 42;
+  });
+  assert.equal(instance.name, '', 'the invalid write must not be stored');
+
+  const violations = runtime.takeAggregateWindowViolations(instance);
+  assert.equal(violations.length, 1);
+  assert.equal(violations[0].propertyPath, context.propertyPath);
+  assert.equal(violations[0].code, 'TYPE_MISMATCH');
+});
+
+test('a VALID field write on an instance with an open aggregate window is stored normally, and nothing is collected', () => {
+  class Dto {
+    constructor() {
+      this.name = '';
+    }
+  }
+  runtime.AggregateErrors()(Dto);
+  const instance = new Dto();
+  guards.installFieldGuard(instance, 'name', stringSchema, context, { initialized: true });
+  runtime.beginAggregateWindow(instance);
+
+  instance.name = 'Ada';
+
+  assert.equal(instance.name, 'Ada');
+  assert.deepEqual(runtime.takeAggregateWindowViolations(instance), []);
+});
+
+test('once the window is closed (takeAggregateWindowViolations called), a later field write goes back to immediate fail-fast', () => {
+  class Dto {
+    constructor() {
+      this.name = '';
+    }
+  }
+  runtime.AggregateErrors()(Dto);
+  const instance = new Dto();
+  guards.installFieldGuard(instance, 'name', stringSchema, context, { initialized: true });
+  runtime.beginAggregateWindow(instance);
+  runtime.takeAggregateWindowViolations(instance); // closes it
+
+  assert.throws(() => {
+    instance.name = 42;
+  }, (error) => error instanceof runtime.StrictTypeError && !(error instanceof runtime.AggregateStrictTypeError));
+});
