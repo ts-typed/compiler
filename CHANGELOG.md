@@ -4,6 +4,15 @@ All notable changes to `@ts-typed/compiler` are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.1.26] - 2026-10-19
+
+### Added
+
+- **`AggregateErrors()` class decorator**: opts a class into collecting every validation violation found in it — at any depth, including nested objects, arrays of objects, and an optional/nullable nested DTO (`profile?: Profile`, `profile: Profile | null`) — into one `AggregateStrictTypeError`, instead of ts-typed's default fail-fast (first violation only). This is scoped to the parameter boundary (a function/method argument — the typed-DTO-in-a-request-body case), which is the only place ts-typed validates "a whole incoming value" in one shot; construction, a field write after construction, variables and return values all stay fail-fast regardless of this decorator.
+- Detection is static: the compiler reads the decorator directly off the class declaration via the type checker, so it works regardless of which file declares the class (the realistic case — a DTO is almost always imported from its own file) and regardless of whether the value is ever instantiated (ts-typed validates a parameter DTO structurally, without instantiating it, by design — see the README's "How it works"). A runtime check on the value's own prototype chain is also kept as a fallback, for a hand-built instance that bypasses the compiler's schema (e.g. constructed and passed directly, not through a compiled parameter boundary).
+- `AggregateStrictTypeError extends StrictTypeError`, so every existing `instanceof StrictTypeError` consumer (application `try`/`catch`, `@ts-typed/nestjs`'s `StrictTypeErrorFilter`) keeps working unchanged — it sees the first violation's fields through the inherited properties, with the full list additionally available as `.errors`.
+- Known scope boundaries: an array-typed **parameter itself** (`dtos: Dto[]`, as opposed to a nested array field) is not aggregated; a namespace-qualified decorator call (`@someNamespace.AggregateErrors()`) is not detected and falls back to fail-fast; a per-field `TypeErrorResponse()` message/status override is not folded into an `AggregateStrictTypeError`'s own fields yet. See the README's [Known limitations](./README.md#known-limitations) and the new [`AggregateErrors()`](./README.md#aggregateerrors) section.
+
 ## [0.1.25] - 2026-10-19
 
 ### Changed
