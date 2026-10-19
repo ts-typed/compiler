@@ -156,6 +156,30 @@ test('assertValueCollecting still reports a plain "union" violation when the val
   assert.equal(violations[0].expected, 'union');
 });
 
+test('assertValueCollecting falls back to one "union" violation when a plain object matches two object-shaped members', () => {
+  const bioProfileSchema = {
+    kind: 'object',
+    properties: { bio: { schema: stringSchema } },
+  };
+  const ageProfileSchema = {
+    kind: 'object',
+    properties: { age: { schema: numberSchema } },
+  };
+  const schema = {
+    kind: 'object',
+    properties: {
+      profile: { schema: { kind: 'union', schemas: [bioProfileSchema, ageProfileSchema] } },
+    },
+  };
+  // A plain object reaches selectSoleStructuralMatch's filter step and matches
+  // both object-shaped members (two matches, so it returns undefined), and it
+  // fails both, so the single opaque "union" fallback must be reported.
+  const violations = assertValueCollecting(schema, { profile: {} }, context);
+
+  assert.equal(violations.length, 1);
+  assert.equal(violations[0].expected, 'union');
+});
+
 test('non-collecting (fail-fast) union validation is unaffected by the new collecting-mode branch', () => {
   const profileSchema = {
     kind: 'object',
