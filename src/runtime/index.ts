@@ -8,6 +8,11 @@ export {
 } from './allow-extra-properties.decorator';
 export { ServerPopulated, isServerPopulated } from './server-populated.decorator';
 export { AggregateErrors, isAggregateErrorsEnabled } from './aggregate-errors.decorator';
+export {
+  beginAggregateWindow,
+  collectIfAggregating,
+  takeAggregateWindowViolations,
+} from './aggregate-window';
 export { TypeErrorResponse, getTypeErrorResponse } from './type-error-response.decorator';
 export type { TypeErrorResponseOptions } from './type-error-response.decorator';
 export {

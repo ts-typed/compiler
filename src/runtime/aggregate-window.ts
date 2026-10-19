@@ -1,0 +1,61 @@
+import { isAggregateErrorsEnabled } from './aggregate-errors.decorator';
+import type { StrictTypeErrorInfo } from './strict-type-error-info.interface';
+
+const windows = new WeakMap<object, StrictTypeErrorInfo[]>();
+
+/**
+ * Opens an "aggregate window" for `instance`, if (and only if) it is an
+ * instance of an `@AggregateErrors()`-decorated class. Called unconditionally
+ * by the compiler at the end of every named class's most-derived
+ * construction (see `create-contract-transformer.ts`'s
+ * `createMostDerivedConstructionStatements`) — this function, not the
+ * transformer, decides whether anything actually happens, exactly like
+ * `isServerPopulated`/`isExtraPropertiesAllowed` already decide their own
+ * classes' behavior from the runtime value rather than compile-time gating.
+ *
+ * While a window is open, `collectIfAggregating` collects violations instead
+ * of signaling "fall back to throwing" — see that function and
+ * `takeAggregateWindowViolations` for the other two thirds of this
+ * mechanism. A window that is never closed (because the instance never
+ * crosses a `protectValue` parameter boundary) stays open indefinitely —
+ * a documented, accepted limitation; see the design doc.
+ */
+export function beginAggregateWindow(instance: object): void {
+  if (!isAggregateErrorsEnabled(instance)) {
+    return;
+  }
+  windows.set(instance, []);
+}
+
+/**
+ * If a window is open for `instance`, records `violation` in it and returns
+ * `true` — the caller must NOT throw and must NOT store the value that
+ * produced this violation (the field keeps whatever it already held).
+ * Returns `false` when no window is open, meaning the caller's normal
+ * fail-fast behavior (throw immediately) is unchanged from today.
+ */
+export function collectIfAggregating(instance: object, violation: StrictTypeErrorInfo): boolean {
+  const buffer = windows.get(instance);
+  if (buffer === undefined) {
+    return false;
+  }
+  buffer.push(violation);
+  return true;
+}
+
+/**
+ * Closes the window for `instance` (so any later field write on it goes back
+ * to ordinary fail-fast) and returns everything collected while it was open
+ * — possibly an empty array, if the window was open but nothing failed.
+ * Returns `undefined` when no window was ever open for this instance, which
+ * is how `protectValue` (guards.ts) tells "nothing to merge" apart from
+ * "the window was open and genuinely found zero violations."
+ */
+export function takeAggregateWindowViolations(instance: object): StrictTypeErrorInfo[] | undefined {
+  const buffer = windows.get(instance);
+  if (buffer === undefined) {
+    return undefined;
+  }
+  windows.delete(instance);
+  return buffer;
+}
