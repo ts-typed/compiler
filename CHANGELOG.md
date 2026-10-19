@@ -4,6 +4,17 @@ All notable changes to `@ts-typed/compiler` are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.1.23] - 2026-10-19
+
+### Added
+
+- Generic call/construct validation now covers **inferred type arguments**, not just explicit ones: `identity(x)` and `new Box(x)` are now validated the same way `identity<Person>(x)` and `new Box<Person>(x)` already were. The caller-side transport (`checker.getResolvedSignature`) already returned the per-call-site instantiated signature regardless of whether `T` was written explicitly or inferred — the only thing that previously gated this off was a check on the call's own syntax (`node.typeArguments`), not on whether the declaration was actually generic. Removing that gate is what makes `function response<T>(data: T): IResponse<T>`, called as `response(user)` with no explicit `<T>`, now validate the returned `IResponse<T>` shape against `T` inferred straight from `user`.
+- If inference can't pin `T` down to anything concrete (no argument references it and no contextual/expected type is available), TypeScript resolves it to `unknown`, which the existing `isUncheckableType` guard already treats as "no contract" rather than validating against the wrong thing — the same safe fallback unsupported types already got.
+
+### Fixed
+
+- Generic calls/constructs whose declaration lives in one of TypeScript's own bundled lib files (`Array.prototype.map`, `Promise.resolve`, `Map`/`Set`'s own methods, `new Map(...)`/`new Set(...)` themselves, etc.) are now explicitly excluded from the generic call/construct guard above. Without this, lifting the explicit-type-argument gate would have meant instrumenting essentially every array/collection operation in a project with argument+return validation — far outside this feature's intended scope of a project's OWN generic functions and classes. It also fixes a real conflict surfaced by the project's own test suite: `new Map(...)`/`new Set(...)` already get dedicated handling elsewhere (entry validation, `compiler.enforceMutationGuards`' mutation-tracking Proxy) keyed off the destination variable's name; guarding the inferred constructor call too double-wrapped the same value under a second, differently-labeled protect call (the constructor name instead of the variable name), and the mutation-guard Proxy ended up reporting the wrong one.
+
 ## [0.1.22] - 2026-10-18
 
 ### Fixed

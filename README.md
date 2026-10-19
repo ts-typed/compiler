@@ -139,20 +139,33 @@ This is still a single-violation (fail-fast) mechanism, like the rest of ts-type
 
 ## Generics
 
-Calling a generic function or constructing a generic class **with an explicit type argument** validates both the arguments and the result against the concrete type for that call:
+Calling a generic function or constructing a generic class validates both the arguments and the result against the concrete type for that call — whether the type argument is written explicitly or left for TypeScript to infer:
 
 ```ts
 function identity<T>(x: T): T { return x; }
 
 identity<Person>(wrongShapedValue); // throws StrictTypeError, validated against Person
+identity(wrongShapedValue);         // same check: T is inferred from the argument's own type
 new Box<Person>(wrongShapedValue);  // same, for constructors
+new Box(wrongShapedValue);          // and for an inferred constructor call
+```
+
+The inferred case uses the exact same instantiated signature TypeScript itself resolves for that call site (the same one a hover tooltip shows) — so it also covers `T` driven purely by a contextual/expected type when no argument pins it down:
+
+```ts
+function response<T>(data: T): IResponse<T> {
+  return { data } as IResponse<T>;
+}
+
+const user: User = { name: 'Ada', age: 36 };
+const result = response(user); // T inferred as User from `user` itself — validates the full IResponse<User> shape
 ```
 
 This also covers:
-- An `async` function's resolved return value (`identityAsync<Person>(x)` — validated via `.then()`, so the call stays a `Promise`; a failed check rejects it, consistent with how any other async failure surfaces).
-- Rest parameters and spread arguments landing in them (`collect<number>(1, 2, 'bad')`, `collect<number>(...mixed)`).
+- An `async` function's resolved return value (`identityAsync<Person>(x)` or its inferred form — validated via `.then()`, so the call stays a `Promise`; a failed check rejects it, consistent with how any other async failure surfaces).
+- Rest parameters and spread arguments landing in them (`collect<number>(1, 2, 'bad')`, `collect<number>(...mixed)`, and their inferred forms).
 
-**Not covered**: an *inferred* type argument (`identity(x)`, no explicit `<T>`) — replicating the compiler's own inference at the call site is a separate, harder problem. Generators' yielded values aren't validated either (a generator call produces an iterator, not a single return value).
+If inference can't pin `T` down to anything concrete (no argument references it and no contextual type is available), TypeScript resolves it to `unknown`, and that's treated the same as any other unsupported type: no contract is generated, rather than validating against the wrong thing. A method whose generic declaration lives in one of TypeScript's own bundled lib files (`Array.prototype.map`, `Promise.resolve`, `Map`/`Set`'s own methods, etc.) is deliberately excluded — guarding those would mean instrumenting essentially every array/collection operation in a project, far outside this feature's intended scope of the project's OWN generic functions and classes, and some of those built-ins (`Map`/`Set`) already get their own dedicated, purpose-built handling elsewhere (entry validation, `compiler.enforceMutationGuards`). Generators' yielded values aren't validated either (a generator call produces an iterator, not a single return value).
 
 ## Known limitations
 
@@ -160,10 +173,9 @@ These are deliberate, documented scope boundaries, not oversights:
 
 - **Multiple violations aren't aggregated.** ts-typed validates and populates an object field-by-field, throwing on the first bad field — unlike `class-validator`'s "populate everything, then validate the whole object in one pass, collecting every violation" model. If you need every violation in one response, you'll need to keep (or reintroduce) that kind of aggregate validation yourself for now.
 - **`WeakMap`/`WeakSet`** are unsupported at the schema level (not just unprotected at runtime) — they can't be iterated, so there's nothing to validate at a boundary crossing.
-- **Inferred generic type arguments** (no explicit `<T>`) aren't transported into a call.
 - **AMD/UMD/System module output**, and the `let x; export { x };` list form, aren't covered by the CommonJS `exports` guard (ESM needs no equivalent — module namespace objects are already non-writable by spec).
 - **Mutation guards only wrap the boundary-crossing value and its nested containers** at the moment the guard was created or a new value is written through it — a raw reference taken *before* the boundary, or a `Set`'s pre-existing items (which can't be swapped without changing iteration order), bypass the guard.
-- **`new Box<T>(x)` (construct expressions) with rest/spread, and inferred generic classes/methods with no call-expression form**, are outside the explicit-generics support described above where noted.
+- **Generic classes/methods with no call-expression form** (e.g. a generic value used only as a type annotation, never actually called or constructed) have nothing for the [Generics](#generics) support to attach to — there's no call site to resolve an instantiated signature from.
 
 ## License
 

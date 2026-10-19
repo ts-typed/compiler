@@ -2375,6 +2375,22 @@ function isUncheckableType(type: ts.Type, typescript: typeof import('typescript'
   )) !== 0;
 }
 
+/**
+ * True when `declaration` lives in one of TypeScript's own bundled lib files (`lib.es2015.collection.d.ts`
+ * and friends) rather than in the project's own source or a regular `node_modules` package. A generic
+ * built-in like `Map`/`Set`/`Promise`/`Array` is already given its own dedicated, purpose-built runtime
+ * treatment elsewhere (e.g. the `Map`/`Set` entry validation and `compiler.enforceMutationGuards`'
+ * mutation-tracking Proxy, both applied at the typed-boundary site the value is assigned to). Guarding an
+ * inferred `new Map(...)`/`.set(...)` call on top of that double-wraps the same value in two independent
+ * protect calls with two different labels (the constructor/method name here vs. the destination
+ * variable's name there), which is at best redundant and at worst actively conflicts with the dedicated
+ * mechanism. Explicit generic calls into a project's OWN generic classes/functions are unaffected — this
+ * only excludes declarations TypeScript ships itself.
+ */
+function isDeclaredInDefaultLib(declaration: ts.Node, state: FileTransformState): boolean {
+  return optionsForState(state).analysis.program.isSourceFileDefaultLibrary(declaration.getSourceFile());
+}
+
 function getYieldSchema(
   node: ts.FunctionLikeDeclaration,
   descriptor: ContractDescriptor | undefined,
@@ -2599,7 +2615,7 @@ function visitCallExpression(
 ): ts.Expression {
   const visited = typescript.visitEachChild(node, visitor, context) as ts.CallExpression;
   const rewritten = rewriteRuntimeRequire(visited, state, factory, typescript);
-  return guardExplicitGenericCall(node, rewritten, state, factory, typescript);
+  return guardGenericCall(node, rewritten, state, factory, typescript);
 }
 
 function visitNewExpression(
@@ -2611,28 +2627,30 @@ function visitNewExpression(
   context: ts.TransformationContext,
 ): ts.Expression {
   const visited = typescript.visitEachChild(node, visitor, context) as ts.NewExpression;
-  return guardExplicitGenericConstruct(node, visited, state, factory, typescript);
+  return guardGenericConstruct(node, visited, state, factory, typescript);
 }
 
 /**
- * Caller-side transport for generic class construction with EXPLICIT type arguments (`new Box<Person>(x)`).
- * Mirrors `guardExplicitGenericCall` for constructors: each constructor argument whose instantiated
- * parameter type is protectable is checked as an argument, and the constructed instance is checked
- * against the instantiated instance type. Constructors are always synchronous, so there is no async
- * branch. Inferred type arguments (`new Box(x)`) are not handled. A rest parameter checks each argument
- * landing in it against the element type; a spread landing in it is checked as an array of that type,
- * and a spread before the rest parameter stops the check (its length is unknown).
+ * Caller-side transport for generic class construction (`new Box<Person>(x)` or inferred `new Box(x)`).
+ * Mirrors `guardGenericCall` for constructors: each constructor argument whose instantiated parameter
+ * type is protectable is checked as an argument, and the constructed instance is checked against the
+ * instantiated instance type. Constructors are always synchronous, so there is no async branch. Whether
+ * the type argument was written explicitly or left for TypeScript to infer makes no difference here:
+ * `checker.getResolvedSignature` already returns the per-call-site instantiated signature either way,
+ * with the inferred `T` substituted in. A rest parameter checks each argument landing in it against the
+ * element type; a spread landing in it is checked as an array of that type, and a spread before the rest
+ * parameter stops the check (its length is unknown). If inference leaves `T` unconstrained, TypeScript
+ * resolves it to `unknown`, and `resolveProtectedCallSchema`'s `isUncheckableType` guard already skips
+ * `unknown`/`any`/`void` — so an uninferable type parameter silently generates no contract, the same way
+ * it already does for every other unsupported type, instead of validating against the wrong thing.
  */
-function guardExplicitGenericConstruct(
+function guardGenericConstruct(
   node: ts.NewExpression,
   visited: ts.NewExpression,
   state: FileTransformState,
   factory: ts.NodeFactory,
   typescript: typeof import('typescript'),
 ): ts.Expression {
-  if (node.typeArguments === undefined || node.typeArguments.length === 0) {
-    return visited;
-  }
   const checker = optionsForState(state).analysis.checker;
   const signature = checker.getResolvedSignature(node);
   const declaration = signature?.declaration as ts.SignatureDeclaration | ts.ClassLikeDeclaration | undefined;
@@ -2641,7 +2659,7 @@ function guardExplicitGenericConstruct(
   }
   // A constructor's type parameters live on its class; a construct signature carries its own.
   const genericOwner = typescript.isConstructorDeclaration(declaration) ? declaration.parent : declaration;
-  if (genericOwner.typeParameters === undefined) {
+  if (genericOwner.typeParameters === undefined || isDeclaredInDefaultLib(genericOwner, state)) {
     return visited;
   }
 
@@ -2760,28 +2778,40 @@ function rewriteRuntimeRequire(
 }
 
 /**
- * Caller-side transport for generic calls with EXPLICIT type arguments (`identity<Person>(x)`).
- * A generic callee's body is compiled once and cannot see the concrete `T` of a given call, so
- * the concrete signature is taken from the checker at this call site instead: each argument whose
- * instantiated parameter type is protectable is checked as an argument, and the whole call is
- * checked against the instantiated return type. Inferred type arguments (`identity(x)`) are not
- * handled. A rest parameter checks each argument landing in it against the element type; a spread landing in
- * it is checked as an array of that type, and a spread before the rest parameter stops the check.
+ * Caller-side transport for generic calls, with an explicit type argument (`identity<Person>(x)`) or
+ * an inferred one (`identity(x)`). A generic callee's body is compiled once and cannot see the concrete
+ * `T` of a given call, so the concrete signature is taken from the checker at this call site instead:
+ * `checker.getResolvedSignature` returns the already-instantiated signature for THIS call regardless of
+ * whether `T` was written explicitly or inferred from the arguments/contextual type — the same
+ * resolution a hover tooltip would show. Each argument whose instantiated parameter type is protectable
+ * is checked as an argument, and the whole call is checked against the instantiated return type. If
+ * inference leaves `T` unconstrained (no argument or contextual type pins it down), TypeScript resolves
+ * it to `unknown`, and `resolveProtectedCallSchema`'s `isUncheckableType` guard already skips
+ * `unknown`/`any`/`void` — so an uninferable type parameter silently generates no contract, instead of
+ * validating against the wrong thing. A rest parameter checks each argument landing in it against the
+ * element type; a spread landing in it is checked as an array of that type, and a spread before the rest
+ * parameter stops the check. `isDeclaredInDefaultLib` excludes a method whose generic declaration comes
+ * from TypeScript's own bundled libs — without it, every `.map()`/`.filter()`/`Promise.resolve()`/etc.
+ * call in a whole project would start getting wrapped, which is both far outside this feature's intended
+ * scope (the project's OWN generic functions/classes) and conflicts with the dedicated handling some of
+ * those built-ins already get elsewhere (see that function's own comment for the concrete case).
  */
-function guardExplicitGenericCall(
+function guardGenericCall(
   node: ts.CallExpression,
   visited: ts.CallExpression,
   state: FileTransformState,
   factory: ts.NodeFactory,
   typescript: typeof import('typescript'),
 ): ts.Expression {
-  if (node.typeArguments === undefined || node.typeArguments.length === 0) {
-    return visited;
-  }
   const checker = optionsForState(state).analysis.checker;
   const signature = checker.getResolvedSignature(node);
   const declaration = signature?.declaration as ts.SignatureDeclaration | undefined;
-  if (signature === undefined || declaration === undefined || declaration.typeParameters === undefined) {
+  if (
+    signature === undefined ||
+    declaration === undefined ||
+    declaration.typeParameters === undefined ||
+    isDeclaredInDefaultLib(declaration, state)
+  ) {
     return visited;
   }
 

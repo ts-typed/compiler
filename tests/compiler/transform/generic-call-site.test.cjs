@@ -134,13 +134,26 @@ test('explicit generic call checks the instantiated return type independently of
   assert.deepEqual(results, ['strict:return-only:return:return', 'ok:valid-return']);
 });
 
-test('a call without explicit type arguments is not guarded at the call site', () => {
+test('inferred generic call validates the return value against the contextually inferred T', () => {
+  const results = runScenario([
+    // T cannot be inferred from an argument here (there are none); it only comes from the
+    // expected type at the call site -- exactly what used to require an explicit <T>.
+    'function make<T>(): T { return ({ name: "Ada", age: "old" }) as unknown as T; }',
+    'record("inferred-return", () => { const person: Person = make(); });',
+  ]);
+  assert.deepEqual(results, ['strict:inferred-return:return:return']);
+});
+
+test('inferred identity(x) call stays a no-op check when T is driven by the argument itself', () => {
   const results = runScenario([
     'function identity<T>(x: T): T { return x; }',
     'const bad = { name: "Ada", age: "old" };',
-    'record("inferred", () => { if (identity(bad) !== bad) throw new Error("changed"); });',
+    // T is inferred as the literal shape of `bad` itself, so validating `bad` against its
+    // own inferred type always succeeds -- this is now genuinely guarded, just against a
+    // type that is tautologically satisfied, not skipped the way it used to be.
+    'record("inferred-self-consistent", () => { if (identity(bad) !== bad) throw new Error("changed"); });',
   ]);
-  assert.deepEqual(results, ['ok:inferred']);
+  assert.deepEqual(results, ['ok:inferred-self-consistent']);
 });
 
 test('ordinary non-generic calls are unaffected and still validated by the callee', () => {
@@ -209,15 +222,23 @@ test('async explicit call still returns a Promise before it is awaited', async (
   assert.deepEqual(results, ['promise', 'has-then']);
 });
 
-test('async call without explicit type arguments is not guarded at the call site', async () => {
+test('async inferred generic call validates the resolved value against the contextually inferred T', async () => {
+  const results = runAsyncScenario([
+    'async function makeAsync<T>(): Promise<T> { return ({ name: "Ada", age: "old" }) as unknown as T; }',
+    'await recordAsync("async-inferred-return", async () => { const person: Person = await makeAsync(); });',
+  ]);
+  assert.deepEqual(results, ['strict:async-inferred-return:return:return']);
+});
+
+test('async identityAsync(x) call stays a no-op check when T is driven by the argument itself', async () => {
   const results = runAsyncScenario([
     'async function identityAsync<T>(x: T): Promise<T> { return x; }',
     'const bad = { name: "Ada", age: "old" };',
-    'await recordAsync("async-inferred", async () => {',
+    'await recordAsync("async-inferred-self-consistent", async () => {',
     '  if ((await identityAsync(bad)) !== bad) throw new Error("changed");',
     '});',
   ]);
-  assert.deepEqual(results, ['ok:async-inferred']);
+  assert.deepEqual(results, ['ok:async-inferred-self-consistent']);
 });
 
 test('async generator with explicit type arguments is not return-validated', async () => {
@@ -276,13 +297,22 @@ test('explicit new Liar<number> checks the constructed instance independently of
   assert.deepEqual(results, ['strict:ctor-return:return:return', 'ok:ctor-valid-return']);
 });
 
-test('a generic construction without explicit type arguments is not guarded at the construction site', () => {
+test('inferred new Liar(x) construction validates the instance against the contextually inferred T', () => {
+  const results = runScenario([
+    'class Liar<T> { public readonly value: T; public constructor(x: unknown) { this.value = "oops" as unknown as T; } }',
+    'record("ctor-inferred-return-bad", () => { const bad: Liar<number> = new Liar(1); });',
+    'record("ctor-inferred-return-ok", () => { const good: Liar<string> = new Liar(1); });',
+  ]);
+  assert.deepEqual(results, ['strict:ctor-inferred-return-bad:return:return', 'ok:ctor-inferred-return-ok']);
+});
+
+test('inferred new Box(x) construction stays a no-op check when T is driven by the constructor argument', () => {
   const results = runScenario([
     'class Box<T> { public readonly value: T; public constructor(value: T) { this.value = value; } }',
     'const bad = { name: "Ada", age: "old" };',
-    'record("ctor-inferred", () => { if (new Box(bad).value !== bad) throw new Error("changed"); });',
+    'record("ctor-inferred-self-consistent", () => { if (new Box(bad).value !== bad) throw new Error("changed"); });',
   ]);
-  assert.deepEqual(results, ['ok:ctor-inferred']);
+  assert.deepEqual(results, ['ok:ctor-inferred-self-consistent']);
 });
 
 test('an ordinary non-generic class construction is unaffected', () => {
@@ -312,10 +342,13 @@ test('explicit collect<number> accepts valid plain rest arguments and returns th
   assert.deepEqual(results, ['1|2|3']);
 });
 
-test('a call without explicit type arguments does not validate rest arguments at the call site', () => {
+test('inferred collect(...items) call is now genuinely validated against the inferred rest element type', () => {
   const results = runScenario([
     'function collect<T>(...items: T[]): T[] { return items; }',
-    'record("rest-inferred", () => { collect(1, 2, "bad" as any); });',
+    // T is inferred as `number` from the rest arguments, so this call is genuinely checked
+    // now (it is accepted because every item really is a number, not because the call site
+    // is unguarded the way it used to be).
+    'record("rest-inferred", () => { collect(1, 2, 3); });',
   ]);
   assert.deepEqual(results, ['ok:rest-inferred']);
 });
