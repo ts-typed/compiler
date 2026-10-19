@@ -139,6 +139,8 @@ try {
 }
 ```
 
+This walks every nested object and array to full depth, including an optional or nullable nested DTO (`profile?: Profile`, `profile: Profile | null`) — as long as exactly one non-nullish branch of that field's type is object/array-shaped. A field whose type has two or more genuinely ambiguous object-shaped branches reports one generic violation for that field instead, same as a plain type mismatch would.
+
 `AggregateStrictTypeError extends StrictTypeError`, so existing `instanceof StrictTypeError` code (including `@ts-typed/nestjs`'s `StrictTypeErrorFilter`) keeps working unchanged — it sees the first violation's fields through the inherited properties, with the full list additionally available as `.errors`. Every other boundary (construction, a field write after construction, variables, returns) stays fail-fast regardless of this decorator — there's no "whole form" to aggregate at a single-field write.
 
 ### `ServerPopulated()`
@@ -219,7 +221,7 @@ If an alias can't be turned into something runtime-resolvable — nothing on dis
 
 These are deliberate, documented scope boundaries, not oversights:
 
-- **Multiple violations aren't aggregated by default**, and aggregation (via [`AggregateErrors()`](#aggregateerrors)) is only available at the parameter boundary — a field write after construction, a variable, or a return value still stops at the first violation, same as ever. A per-field `TypeErrorResponse()` message/status override is also not folded into an `AggregateStrictTypeError`'s fields yet (only the first violation's own fields are, via inheritance) — a future enhancement, not done in this first version.
+- **Multiple violations aren't aggregated by default**, and aggregation (via [`AggregateErrors()`](#aggregateerrors)) is only available at the parameter boundary — a field write after construction, a variable, or a return value still stops at the first violation, same as ever. A per-field `TypeErrorResponse()` message/status override is also not folded into an `AggregateStrictTypeError`'s fields yet (only the first violation's own fields are, via inheritance) — a future enhancement, not done in this first version. A genuinely ambiguous union field (two or more object-shaped, non-nullish branches) reports one generic violation for that field rather than walking into either branch.
 - **`WeakMap`/`WeakSet`** are unsupported at the schema level (not just unprotected at runtime) — they can't be iterated, so there's nothing to validate at a boundary crossing.
 - **AMD/UMD/System module output**, and the `let x; export { x };` list form, aren't covered by the CommonJS `exports` guard (ESM needs no equivalent — module namespace objects are already non-writable by spec).
 - **Mutation guards only wrap the boundary-crossing value and its nested containers** at the moment the guard was created or a new value is written through it — a raw reference taken *before* the boundary, or a `Set`'s pre-existing items (which can't be swapped without changing iteration order), bypass the guard.
