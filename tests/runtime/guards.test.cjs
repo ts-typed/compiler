@@ -628,3 +628,107 @@ test('a property with multiple contracts (shared reference) that have DIFFERENT 
     ['First.value', 'Second.value'],
   );
 });
+
+test('protectValue merges window violations (collected during a simulated plainToInstance population) with its own structural pass', () => {
+  class CreateUserDto {
+    constructor() {
+      this.name = '';
+      this.age = 0;
+    }
+  }
+  runtime.AggregateErrors()(CreateUserDto);
+  const schema = {
+    kind: 'object',
+    properties: {
+      name: { schema: stringSchema },
+      age: { schema: numberSchema },
+    },
+    instanceOf: CreateUserDto,
+  };
+
+  // Simulates exactly what class-transformer's plainToInstance does:
+  // construct first (guards installed, defaults in place), THEN assign each
+  // field — which is what Task 2 made collect instead of throw, given an
+  // open window.
+  const instance = new CreateUserDto();
+  guards.installFieldGuard(instance, 'name', stringSchema, context, { initialized: true });
+  guards.installFieldGuard(instance, 'age', numberSchema, context, { initialized: true });
+  runtime.beginAggregateWindow(instance);
+  instance.name = 42; // collected, not thrown (Task 2)
+  instance.age = 'old'; // collected, not thrown (Task 2)
+
+  const parameterContext = { contractKind: 'parameter', operation: 'argument', propertyPath: 'CreateUserDto' };
+
+  assert.throws(
+    () => guards.protectValue(schema, instance, parameterContext),
+    (error) => {
+      assert.ok(error instanceof runtime.AggregateStrictTypeError);
+      assert.equal(error.errors.length, 2);
+      assert.deepEqual(error.errors.map((e) => e.propertyPath).sort(), [context.propertyPath, context.propertyPath].sort());
+      return true;
+    },
+  );
+});
+
+test('protectValue ALSO reports a missing required field via its own structural pass, merged alongside window violations', () => {
+  class CreateUserDto {
+    constructor() {
+      this.name = '';
+      this.age = 0;
+    }
+  }
+  runtime.AggregateErrors()(CreateUserDto);
+  const schema = {
+    kind: 'object',
+    properties: {
+      name: { schema: stringSchema },
+      age: { schema: numberSchema },
+      email: { schema: stringSchema }, // never written at all — required, missing
+    },
+    instanceOf: CreateUserDto,
+  };
+
+  const instance = new CreateUserDto();
+  guards.installFieldGuard(instance, 'name', stringSchema, context, { initialized: true });
+  guards.installFieldGuard(instance, 'age', numberSchema, context, { initialized: true });
+  runtime.beginAggregateWindow(instance);
+  instance.name = 42; // collected (window)
+
+  const parameterContext = { contractKind: 'parameter', operation: 'argument', propertyPath: 'CreateUserDto' };
+
+  assert.throws(
+    () => guards.protectValue(schema, instance, parameterContext),
+    (error) => {
+      assert.ok(error instanceof runtime.AggregateStrictTypeError);
+      const codes = error.errors.map((e) => e.code).sort();
+      assert.deepEqual(codes, ['REQUIRED_PROPERTY', 'TYPE_MISMATCH']);
+      return true;
+    },
+  );
+});
+
+test('protectValue closes the window: a second protectValue call on the same (now otherwise-valid) instance does not re-report anything', () => {
+  class CreateUserDto {
+    constructor() {
+      this.name = '';
+    }
+  }
+  runtime.AggregateErrors()(CreateUserDto);
+  const schema = {
+    kind: 'object',
+    properties: { name: { schema: stringSchema } },
+    instanceOf: CreateUserDto,
+  };
+  const instance = new CreateUserDto();
+  guards.installFieldGuard(instance, 'name', stringSchema, context, { initialized: true });
+  runtime.beginAggregateWindow(instance);
+  instance.name = 'Ada'; // valid, nothing collected
+
+  const parameterContext = { contractKind: 'parameter', operation: 'argument', propertyPath: 'CreateUserDto' };
+  assert.doesNotThrow(() => guards.protectValue(schema, instance, parameterContext));
+
+  // Window is closed now. A later field write goes back to immediate fail-fast.
+  assert.throws(() => {
+    instance.name = 42;
+  }, (error) => error instanceof runtime.StrictTypeError && !(error instanceof runtime.AggregateStrictTypeError));
+});

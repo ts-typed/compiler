@@ -4,7 +4,7 @@ import { isExtraPropertiesAllowed } from '../allow-extra-properties.decorator';
 import { isServerPopulated } from '../server-populated.decorator';
 import { getTypeErrorResponse } from '../type-error-response.decorator';
 import { assertValue, assertValueCollecting } from '../assert-value';
-import { collectIfAggregating, isAggregating } from '../aggregate-window';
+import { collectIfAggregating, isAggregating, takeAggregateWindowViolations } from '../aggregate-window';
 import type { AssertionContext } from '../assertion-context.interface';
 import type {
   ArraySchema,
@@ -107,7 +107,9 @@ export function protectValue(
     !Array.isArray(value) &&
     (schemaRequestsAggregation || isAggregateErrorsEnabled(value))
   ) {
-    const violations = assertValueCollecting(prepared.schema, value, prepared.context);
+    const windowViolations = takeAggregateWindowViolations(value) ?? [];
+    const structuralViolations = assertValueCollecting(prepared.schema, value, prepared.context);
+    const violations = [...windowViolations, ...structuralViolations];
     if (violations.length > 0) {
       throw new AggregateStrictTypeError(violations);
     }
