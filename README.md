@@ -101,7 +101,7 @@ Both `enforceClosedInstances` and `enforceMutationGuards` are off by default bec
 
 ## Performance
 
-`assertValue` validates a value at a boundary; `protectValue` validates and installs the deep mutation protection required by that boundary. The second operation necessarily does more work for large object graphs. A local TypeORM/Express/Nest stress battery with 10,000 entities found a median 6.20 ms for validating a response array and 47.1 ms for projecting away a password field and protecting that array. This intentionally extreme response shape is not a production capacity promise.
+`assertValue` validates a value at a boundary; `protectValue` validates and installs the deep mutation protection required by that boundary. The second operation necessarily does more work for large object graphs. Compiler 0.1.28 caches object-schema keys per traversal; a local TypeORM/Express/Nest stress battery with 10,000 entities found a median 4.89 ms for validating a response array and 43.44 ms for projecting away a password field and protecting that array. This intentionally extreme response shape is not a production capacity promise.
 
 Use bounded pagination/cursors before optimizing a path that sends thousands of records at once. Keep `enforceMutationGuards` opt-in: proxies add per-mutation cost and change identity. The full methodology, reproducible harness, bottleneck study and reference results are in [the project performance notes](https://github.com/ts-typed/ts-typed/blob/main/docs/performance.md).
 
