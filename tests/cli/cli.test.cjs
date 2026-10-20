@@ -2,11 +2,14 @@
 
 const assert = require('node:assert/strict');
 const { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, readFileSync, existsSync } = require('node:fs');
+const { execFileSync } = require('node:child_process');
 const { tmpdir } = require('node:os');
 const { join } = require('node:path');
 const test = require('node:test');
 
 const { runCli } = require('../../dist/cli');
+const { parseNestCommand } = require('../../dist/cli/nest-command');
+const { configureNestProjectScripts } = require('../../dist/config');
 
 const PACKAGE_DIST = join(__dirname, '../../dist');
 
@@ -148,6 +151,136 @@ test('init asks to install the Nest global filter and delegates the opted-in set
   assert.equal(readFileSync(join(root, 'filter-installed'), 'utf8'), 'yes');
   assert.equal(JSON.parse(readFileSync(join(root, 'typets.config.json'), 'utf8')).integration, '@ts-typed/nestjs');
   assert.match(result.stdout.join('\n'), /Registered global filter/);
+});
+
+test('init configures conventional Nest scripts to invoke the ts-typed Nest command once', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'ts-typed-cli-nest-scripts-'));
+  const adapterDirectory = join(root, 'node_modules', '@ts-typed', 'nestjs');
+  mkdirSync(adapterDirectory, { recursive: true });
+  writeFileSync(join(root, 'nest-cli.json'), JSON.stringify({ sourceRoot: 'src' }));
+  writeFileSync(
+    join(root, 'package.json'),
+    JSON.stringify({
+      scripts: {
+        build: 'nest build',
+        start: 'nest start',
+        'start:dev': 'nest start --watch',
+        'start:debug': 'nest start --debug --watch',
+        'start:prod': 'node dist/main',
+        lint: 'eslint "{src,apps,libs,test}/**/*.ts"',
+      },
+    }, null, 2),
+  );
+  writeFileSync(
+    join(adapterDirectory, 'index.js'),
+    "module.exports = { apiVersion: 1, name: 'nestjs', resolveProject: (context) => ({ apiVersion: 1, integration: 'nestjs', projectRoot: context.projectRoot }) };\n",
+  );
+
+  const first = await runCli(['init', '--root', root]);
+  assert.equal(first.exitCode, 0, first.stderr.join('\n'));
+  assert.match(first.stdout.join('\n'), /Configured Nest npm scripts/);
+  assert.doesNotMatch(first.stdout.join('\n'), /build: ts-typed build/);
+  const firstManifest = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
+  assert.deepEqual(firstManifest.scripts, {
+    build: 'ts-typed nest build',
+    start: 'ts-typed nest start',
+    'start:dev': 'ts-typed nest start --watch',
+    'start:debug': 'ts-typed nest start --debug --watch',
+    'start:prod': 'node dist/main',
+    lint: 'eslint "{src,apps,libs,test}/**/*.ts"',
+  });
+
+  const second = await runCli(['init', '--root', root]);
+  assert.equal(second.exitCode, 0, second.stderr.join('\n'));
+  assert.deepEqual(JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')), firstManifest);
+});
+
+test('Nest script setup leaves custom compiler flags untouched', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'ts-typed-cli-nest-custom-script-'));
+  writeFileSync(
+    join(root, 'package.json'),
+    JSON.stringify({ scripts: { build: 'nest build --webpack', start: 'nest start --config custom.json' } }),
+  );
+
+  const result = await configureNestProjectScripts(root);
+
+  assert.equal(result.changed, false);
+  assert.deepEqual(JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).scripts, {
+    build: 'nest build --webpack',
+    start: 'nest start --config custom.json',
+  });
+});
+
+test('nest build compiles a TypeScript-builder project without bundling', async () => {
+  const { projectRoot } = writeConsumerProject();
+  writeFileSync(
+    join(projectRoot, 'nest-cli.json'),
+    JSON.stringify({ sourceRoot: 'src', compilerOptions: { builder: 'tsc', tsConfigPath: 'tsconfig.json' } }),
+  );
+
+  const result = await runCli(['nest', 'build', '--root', projectRoot]);
+
+  assert.equal(result.exitCode, 0, result.stderr.join('\n'));
+  assert.match(result.stdout.join('\n'), /Nest build succeeded/);
+  assert.equal(existsSync(join(projectRoot, 'dist', 'main.js')), true);
+});
+
+test('nest build rejects SWC before emitting a potentially unprotected build', async () => {
+  const { projectRoot } = writeConsumerProject();
+  writeFileSync(
+    join(projectRoot, 'nest-cli.json'),
+    JSON.stringify({ sourceRoot: 'src', compilerOptions: { builder: 'swc', tsConfigPath: 'tsconfig.json' } }),
+  );
+
+  const result = await runCli(['nest', 'build', '--root', projectRoot]);
+
+  assert.equal(result.exitCode, 1);
+  assert.match(result.stderr.join('\n'), /SWC.*not supported/i);
+});
+
+test('nest start builds and executes the emitted Nest entry point', async () => {
+  const { projectRoot } = writeConsumerProject();
+  writeFileSync(
+    join(projectRoot, 'nest-cli.json'),
+    JSON.stringify({ sourceRoot: 'src', compilerOptions: { builder: 'tsc', tsConfigPath: 'tsconfig.json' } }),
+  );
+
+  const result = await runCli(['nest', 'start', '--root', projectRoot]);
+
+  assert.equal(result.exitCode, 0, result.stderr.join('\n'));
+  assert.match(result.stdout.join('\n'), /Nest application exited successfully/);
+});
+
+test('nest start accepts watch and debug flags from conventional Nest scripts', () => {
+  const parsed = parseNestCommand(['start', '--debug', '--watch', '--root', '/tmp/nest-project']);
+
+  assert.equal(parsed.error, undefined);
+  assert.equal(parsed.command, 'start');
+  assert.equal(parsed.debug, true);
+  assert.equal(parsed.watch, true);
+  assert.equal(parsed.projectRoot, '/tmp/nest-project');
+});
+
+test('npm run build and npm start execute the Nest wrapper installed by init', async () => {
+  const { projectRoot } = writeConsumerProject();
+  const binaryDirectory = join(projectRoot, 'node_modules', '.bin');
+  mkdirSync(binaryDirectory, { recursive: true });
+  symlinkSync(join(PACKAGE_DIST, 'cli', 'index.js'), join(binaryDirectory, 'ts-typed'));
+  writeFileSync(
+    join(projectRoot, 'nest-cli.json'),
+    JSON.stringify({ sourceRoot: 'src', compilerOptions: { builder: 'tsc', tsConfigPath: 'tsconfig.json' } }),
+  );
+  writeFileSync(
+    join(projectRoot, 'package.json'),
+    JSON.stringify({ scripts: { build: 'ts-typed nest build', start: 'ts-typed nest start' } }),
+  );
+
+  const buildOutput = execFileSync('npm', ['run', 'build'], { cwd: projectRoot, encoding: 'utf8' });
+  const startOutput = execFileSync('npm', ['start'], { cwd: projectRoot, encoding: 'utf8' });
+
+  assert.match(buildOutput, /Nest build succeeded/);
+  assert.match(startOutput, /Nest application exited successfully/);
+  assert.equal(existsSync(join(projectRoot, 'dist', 'main.js')), true);
 });
 
 test('build runs an unbundled project end to end and reports success', async () => {

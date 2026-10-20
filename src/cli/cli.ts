@@ -5,9 +5,10 @@ import { buildProject } from '../compiler/build';
 import type { CoverageReport } from '../compiler/report';
 import { createCoverageReport, formatCoverageReport } from '../compiler/report';
 import type { ConfigOverrides } from '../config';
-import { ConfigError, initializeProject, loadConfig } from '../config';
+import { ConfigError, configureNestProjectScripts, initializeProject, loadConfig } from '../config';
 import { loadIntegration } from '../integration';
 import type { CliResult } from './cli-result.interface';
+import { runNestCommand } from './nest-command';
 
 const CONFIG_FILE_NAME = 'typets.config.json';
 
@@ -21,6 +22,7 @@ const HELP_TEXT = [
   'Usage:',
   '  ts-typed init [--root <path>]',
   '  ts-typed build [--config <path>] [--no-bundle] [--minify] [--sourcemap]',
+  '  ts-typed nest build [--root <path>] [--config <path>]',
   '  ts-typed help',
   '',
   'Options:',
@@ -54,6 +56,10 @@ export async function runCli(
     return await runBuild(rest);
   }
 
+  if (command === 'nest') {
+    return await runNestCommand(rest);
+  }
+
   return {
     exitCode: EXIT_USAGE,
     stdout: [],
@@ -73,15 +79,20 @@ async function runInit(args: readonly string[], options: RunCliOptions): Promise
     const result = await initializeProject(parsed.root, {
       ...(nestAdapter === undefined ? {} : { integration: '@ts-typed/nestjs' }),
     });
-    const stdout = [
-      result.created
-        ? `Created ${result.configPath}`
-        : `Configuration already exists at ${result.configPath}`,
-      'Suggested package.json scripts:',
-      ...result.suggestedScripts.map((script) => `  ${script}`),
-    ];
+    const stdout = [result.created
+      ? `Created ${result.configPath}`
+      : `Configuration already exists at ${result.configPath}`];
+
+    if (!isNestProject) {
+      stdout.push(
+        'Suggested package.json scripts:',
+        ...result.suggestedScripts.map((script) => `  ${script}`),
+      );
+    }
 
     if (isNestProject) {
+      const scripts = await configureNestProjectScripts(parsed.root);
+      stdout.push(scripts.message);
       const installFilter = nestAdapter?.installGlobalStrictTypeErrorFilter;
       if (installFilter === undefined) {
         stdout.push('NestJS detected, but @ts-typed/nestjs is unavailable; global filter was not configured.');

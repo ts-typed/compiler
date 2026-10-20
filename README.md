@@ -19,6 +19,7 @@ Full behavior spec: [`docs/SPEC.md`](https://github.com/ts-typed/ts-typed/blob/m
 - [What gets checked](#what-gets-checked)
 - [Error handling](#error-handling)
 - [Configuration reference](#configuration-reference)
+- [NestJS: native npm scripts](#nestjs-native-npm-scripts)
 - [Decorators](#decorators)
 - [Generics](#generics)
 - [Path aliases (`tsconfig.json` `paths`)](#path-aliases-tsconfigjson-paths)
@@ -98,6 +99,33 @@ Both `enforceClosedInstances` and `enforceMutationGuards` are off by default bec
 - **`enforceMutationGuards`** wraps the value in a `Proxy`, which has a real per-mutation validation cost and changes the value's identity (the returned value is a proxy, not the original reference) — acceptable for many use cases, not something to turn on blindly everywhere.
 
 **The governing rule for any ts-typed config flag that overlaps with another library's own setting: ts-typed's config decides the behavior, and the rest of your stack must be configured to agree with it.** A mismatch (e.g. `enforceClosedInstances: true` with `class-transformer` still doing copy-then-strip) is an application configuration bug, not a ts-typed bug.
+
+## NestJS: native npm scripts
+
+Install the compiler and Nest adapter, then initialize from the root of a conventional Nest project:
+
+```bash
+npm install --save-dev @ts-typed/compiler @ts-typed/nestjs
+npx ts-typed init
+```
+
+`init` detects the normal Nest scripts and changes only their compiler command. The familiar commands continue to be the public workflow:
+
+```json
+{
+  "scripts": {
+    "build": "ts-typed nest build",
+    "start": "ts-typed nest start",
+    "start:dev": "ts-typed nest start --watch",
+    "start:debug": "ts-typed nest start --debug --watch",
+    "start:prod": "node dist/main"
+  }
+}
+```
+
+The Nest command builds the project through the TS Typed transformer without NCC bundling, so Nest's normal `dist/main.js` production entry remains intact. In watch mode it rebuilds the protected output and only restarts the application after a successful build. Initialization is idempotent and leaves unrelated or custom scripts unchanged.
+
+This path requires Nest's TypeScript (`tsc`) builder. SWC, Rspack, and webpack do not run TypeScript custom transformers, so TS Typed rejects them rather than emitting code that appears built but is not runtime-protected. Set `"compilerOptions": { "builder": "tsc" }` in `nest-cli.json` when necessary.
 
 ## Performance
 

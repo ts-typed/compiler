@@ -4,6 +4,13 @@ All notable changes to `@ts-typed/compiler` are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.1.29] - 2026-10-20
+
+### Added
+
+- **Native Nest npm workflow.** `ts-typed init` now recognizes a conventional Nest project and configures its ordinary `build`, `start`, `start:dev`, and `start:debug` scripts to run through TS Typed. `ts-typed nest build` emits unbundled protected JavaScript into Nest's normal `dist` directory; `ts-typed nest start` builds and runs `dist/main.js`; watch mode rebuilds and restarts only after a successful compilation. Initialization is idempotent and custom scripts are deliberately untouched.
+- **Safe Nest builder gate.** The Nest command explicitly supports Nest's `tsc` builder. It rejects SWC, Rspack, and webpack before emitting output, because those builders cannot execute TS Typed's TypeScript transformer and would otherwise create an application that looks built but has no runtime contract protection.
+
 ## [0.1.28] - 2026-10-19
 
 ### Changed
