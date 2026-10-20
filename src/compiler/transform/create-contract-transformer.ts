@@ -1,6 +1,6 @@
 import type ts from 'typescript';
 
-import type { ContractDescriptor, CoverageDiagnostic } from '../analysis';
+import type { ContractDescriptor, CoverageDiagnostic, SchemaResolution } from '../analysis';
 import type { Schema } from '../../runtime';
 import type { ContractTransformerOptions } from './contract-transformer-options.interface';
 import { createSchemaExpression } from './schema-expression';
@@ -1685,7 +1685,12 @@ function createProtectCall(
   functionName?: string,
 ): ts.Expression {
   return factory.createCallExpression(
-    factory.createPropertyAccessExpression(state.runtimeIdentifier, 'protectValue'),
+    factory.createPropertyAccessExpression(
+      state.runtimeIdentifier,
+      descriptor.resolution?.protectionStrategy === 'optimizedImmutable'
+        ? 'protectOptimizedImmutableValue'
+        : 'protectValue',
+    ),
     undefined,
     [
       createSchemaExpression(optionsForState(state).analysis.typescript, factory, schema),
@@ -1699,6 +1704,7 @@ function createProtectCall(
 interface ProtectedContractLabel {
   readonly kind: string;
   readonly name: string;
+  readonly resolution?: Pick<SchemaResolution, 'protectionStrategy'>;
 }
 
 function createContextExpression(

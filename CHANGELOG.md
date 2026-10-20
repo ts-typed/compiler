@@ -4,6 +4,24 @@ All notable changes to `@ts-typed/compiler` are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.1.31] - 2026-10-20
+
+### Added
+
+- **`TTOptImmut<T>` for high-volume immutable response DTOs.** This opt-in type
+  validates the complete contract and then deeply freezes plain objects and
+  arrays instead of installing a mutable accessor guard for every field. The
+  result is deeply `readonly` in TypeScript and remains an ordinary POJO for
+  `Object.keys`, spread, JSON and `structuredClone`. It is intended for fresh,
+  read-only response DTOs such as `TTOptImmut<IUserData[]>`; entities, classes,
+  `Date`, `Map`, `Set`, functions, accessor-backed objects, indexed shapes,
+  unions and intersections receive an explicit unsupported diagnostic rather
+  than a silent fallback.
+- **Expanded performance battery.** The reproducible TypeORM/Express/Nest
+  harness now compares baseline, mutable `protectValue`, and `TTOptImmut` at
+  1, 50 and 10,000 DTOs while verifying `passwordHash` never reaches the
+  response.
+
 ## [0.1.30] - 2026-10-20
 
 ### Fixed

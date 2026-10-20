@@ -64,7 +64,25 @@ export class TypeSchemaResolver {
   ) {}
 
   public resolve(type: ts.Type, node: ts.Node): SchemaResolution {
-    return this._resolveType(type, node, true);
+    const optimizedImmutableType = this._unwrapTTOptImmut(type);
+    if (optimizedImmutableType !== undefined) {
+      const unsupportedReason = this._findTTOptImmutUnsupportedReason(
+        optimizedImmutableType,
+        node,
+        new Set<ts.Type>(),
+      );
+      if (unsupportedReason !== undefined) {
+        return {
+          status: 'unsupported',
+          reason: `TTOptImmut cannot be used here: ${unsupportedReason}`,
+          protectionStrategy: 'optimizedImmutable',
+        };
+      }
+    }
+    const resolution = this._resolveType(optimizedImmutableType ?? type, node, true);
+    return optimizedImmutableType === undefined
+      ? resolution
+      : { ...resolution, protectionStrategy: 'optimizedImmutable' };
   }
 
   public getDefinitions(): Readonly<Record<string, Schema>> {
@@ -102,6 +120,108 @@ export class TypeSchemaResolver {
    */
   public isAggregateErrorsClass(definitionName: string): boolean {
     return this._aggregateErrorsDefinitionNames.has(definitionName);
+  }
+
+  /**
+   * The public `TTOptImmut<T>` alias is a compile-time marker, not a runtime
+   * schema node. Unwrap it only at the contract boundary (`resolve` above),
+   * so an ordinary nested type alias cannot accidentally change how an outer
+   * mutable contract is protected.
+   */
+  private _unwrapTTOptImmut(type: ts.Type): ts.Type | undefined {
+    if (type.aliasSymbol?.getName() === 'TTOptImmut') {
+      const [typeArgument] = type.aliasTypeArguments ?? [];
+      if (typeArgument !== undefined) {
+        return typeArgument;
+      }
+    }
+
+    // TypeScript expands `TTOptImmut<T>` into an intersection when a consumer
+    // gives it another alias (`type Users = TTOptImmut<User[]>`). The unique
+    // symbol survives that expansion as an escaped property name, while the
+    // generic alias itself does not. Remove only that marker constituent.
+    if (!type.isIntersection()) {
+      return undefined;
+    }
+    const markerIndex = type.types.findIndex((member) =>
+      this._hasTTOptImmutBrand(member),
+    );
+    if (markerIndex === -1 || type.types.length !== 2) {
+      return undefined;
+    }
+    return type.types[markerIndex === 0 ? 1 : 0];
+  }
+
+  private _hasTTOptImmutBrand(type: ts.Type): boolean {
+    return this._checker.getPropertiesOfType(type).some((property) =>
+      property.getName().startsWith('__@ttOptImmutBrand@'),
+    );
+  }
+
+  /**
+   * `TTOptImmut` is deliberately narrower than regular structural contracts:
+   * it promises native immutable POJOs, so a class, accessor-oriented builtin
+   * or ambiguous compound contract must fail at build time instead of quietly
+   * falling back to accessor guards.
+   */
+  private _findTTOptImmutUnsupportedReason(
+    type: ts.Type,
+    node: ts.Node,
+    visited: Set<ts.Type>,
+  ): string | undefined {
+    if (visited.has(type)) {
+      return undefined;
+    }
+    visited.add(type);
+    if ((type.flags & (this._typescript.TypeFlags.Any | this._typescript.TypeFlags.Unknown)) !== 0) {
+      return 'any and unknown do not describe a concrete immutable DTO shape.';
+    }
+    if ((type.flags & this._typescript.TypeFlags.NonPrimitive) !== 0) {
+      return 'the broad object type does not describe a concrete immutable DTO shape.';
+    }
+    if (this._resolveDirectType(type) !== undefined) {
+      return this._isGlobalDate(type) ? 'Date values are not plain DTO data.' : undefined;
+    }
+    if (type.isUnion() || type.isIntersection()) {
+      return 'union and intersection contracts are ambiguous for the immutable DTO strategy.';
+    }
+    if (this._isPureFunction(type)) {
+      return 'functions are not plain DTO data.';
+    }
+    if (this._checker.isTupleType(type) || this._checker.isArrayType(type)) {
+      const itemTypes = this._checker.getTypeArguments(type as ts.TypeReference);
+      for (const itemType of itemTypes) {
+        const reason = this._findTTOptImmutUnsupportedReason(itemType, node, visited);
+        if (reason !== undefined) {
+          return reason;
+        }
+      }
+      return undefined;
+    }
+    if (this._getGlobalCollectionKind(type) !== undefined) {
+      return 'Map and Set values are not plain DTO data.';
+    }
+    if ((type.flags & this._typescript.TypeFlags.Object) === 0) {
+      return `type ${this._checker.typeToString(type, node)} is not a plain DTO value.`;
+    }
+    if (this._getClassSymbol(type) !== undefined) {
+      return 'class instances require normal typed protection so their mutable behavior remains valid.';
+    }
+    if (this._checker.getIndexInfosOfType(type).length > 0) {
+      return 'indexed object contracts are not supported by the immutable DTO strategy.';
+    }
+    for (const property of this._checker.getPropertiesOfType(type)) {
+      const declaration = property.valueDeclaration ?? property.declarations?.[0] ?? node;
+      const reason = this._findTTOptImmutUnsupportedReason(
+        this._checker.getTypeOfSymbolAtLocation(property, declaration),
+        declaration,
+        visited,
+      );
+      if (reason !== undefined) {
+        return `property ${property.getName()} is unsupported because ${reason}`;
+      }
+    }
+    return undefined;
   }
 
   private _resolveType(type: ts.Type, node: ts.Node, canCreateDefinition: boolean): SchemaResolution {
