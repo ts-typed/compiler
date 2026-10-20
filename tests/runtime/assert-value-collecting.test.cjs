@@ -3,7 +3,15 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 
-const { assertValue, assertValueCollecting, StrictTypeError } = require('../../dist/runtime');
+const {
+  AggregateErrors,
+  assertValue,
+  assertValueCollecting,
+  beginAggregateWindow,
+  collectIfAggregating,
+  StrictTypeError,
+  takeAggregateWindowViolations,
+} = require('../../dist/runtime');
 
 const stringSchema = { kind: 'primitive', name: 'string' };
 const numberSchema = { kind: 'primitive', name: 'number' };
@@ -221,4 +229,89 @@ test('non-collecting (fail-fast) union validation is unaffected by the new colle
     () => assertValue(schema, { bio: 7 }, context),
     (error) => error.propertyPath === context.propertyPath && error.expected === 'union',
   );
+});
+
+test('assertValueCollecting drains a nested instance\'s open aggregate window and merges it with the structural pass, instead of silently accepting its stale default value', () => {
+  class Profile {
+    constructor() {
+      this.bio = '';
+    }
+  }
+  AggregateErrors()(Profile);
+  const profile = new Profile();
+  beginAggregateWindow(profile);
+  collectIfAggregating(profile, {
+    code: 'TYPE_MISMATCH',
+    contractKind: 'property',
+    propertyPath: 'Profile.bio',
+    expected: 'string',
+    received: 'number',
+    operation: 'set',
+  });
+
+  const schema = {
+    kind: 'object',
+    properties: {
+      name: { schema: stringSchema },
+      profile: { schema: { kind: 'object', properties: { bio: { schema: stringSchema } } } },
+    },
+  };
+  const violations = assertValueCollecting(schema, { name: 'Ada', profile }, context);
+
+  assert.equal(violations.length, 1);
+  assert.equal(violations[0].propertyPath, 'Profile.bio');
+});
+
+test('assertValue (fail-fast) also drains and throws for a nested instance with an open aggregate window, instead of accepting it', () => {
+  class Profile {
+    constructor() {
+      this.bio = '';
+    }
+  }
+  AggregateErrors()(Profile);
+  const profile = new Profile();
+  beginAggregateWindow(profile);
+  collectIfAggregating(profile, {
+    code: 'TYPE_MISMATCH',
+    contractKind: 'property',
+    propertyPath: 'Profile.bio',
+    expected: 'string',
+    received: 'number',
+    operation: 'set',
+  });
+
+  const schema = {
+    kind: 'object',
+    properties: { profile: { schema: { kind: 'object', properties: { bio: { schema: stringSchema } } } } },
+  };
+
+  assert.throws(
+    () => assertValue(schema, { profile }, context),
+    (error) => error instanceof StrictTypeError && error.propertyPath === 'Profile.bio',
+  );
+});
+
+test('a reference value that never had a window opened is completely unaffected by the drain check', () => {
+  const schema = { kind: 'object', properties: { bio: { schema: stringSchema } } };
+  assert.deepEqual(assertValueCollecting(schema, { bio: 'ok' }, context), []);
+  assert.doesNotThrow(() => assertValue(schema, { bio: 'ok' }, context));
+});
+
+test('an unknown contract does not close an aggregate window before a structural boundary reaches the instance', () => {
+  class Profile {}
+  AggregateErrors()(Profile);
+  const profile = new Profile();
+  beginAggregateWindow(profile);
+  collectIfAggregating(profile, {
+    code: 'TYPE_MISMATCH',
+    contractKind: 'property',
+    propertyPath: 'Profile.bio',
+    expected: 'string',
+    received: 'number',
+    operation: 'set',
+  });
+
+  assertValue({ kind: 'unknown' }, profile, context);
+
+  assert.equal(takeAggregateWindowViolations(profile).length, 1);
 });

@@ -570,6 +570,31 @@ test('a VALID field write on an instance with an open aggregate window is stored
   assert.deepEqual(runtime.takeAggregateWindowViolations(instance), []);
 });
 
+test('a field write with one invalid nested value collects every structural violation while its aggregate window is open', () => {
+  class Dto {
+    constructor() {
+      this.profile = { name: '', age: 0 };
+    }
+  }
+  runtime.AggregateErrors()(Dto);
+  const instance = new Dto();
+  const profileSchema = {
+    kind: 'object',
+    properties: {
+      name: { schema: stringSchema },
+      age: { schema: numberSchema },
+    },
+  };
+  guards.installFieldGuard(instance, 'profile', profileSchema, context, { initialized: true });
+  runtime.beginAggregateWindow(instance);
+
+  instance.profile = { name: 7, age: 'old' };
+
+  assert.equal(instance.profile.name, '');
+  assert.equal(instance.profile.age, 0);
+  assert.equal(runtime.takeAggregateWindowViolations(instance).length, 2);
+});
+
 test('once the window is closed (takeAggregateWindowViolations called), a later field write goes back to immediate fail-fast', () => {
   class Dto {
     constructor() {

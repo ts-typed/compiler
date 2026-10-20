@@ -1,4 +1,5 @@
 import type { AssertionContext } from './assertion-context.interface';
+import { takeAggregateWindowViolations } from './aggregate-window';
 import { SchemaRegistry } from './schema-registry.class';
 import { getClassValidationMode } from './strict-class.decorator';
 import type {
@@ -74,6 +75,17 @@ function validate(
   if (schema.kind === 'ref') {
     validate(resolveReference(schema, state.registry), value, context, path, state);
     return;
+  }
+
+  if (isReferenceValue(value) && traversesReferenceValue(schema)) {
+    const windowViolations = takeAggregateWindowViolations(value);
+    if (windowViolations !== undefined && windowViolations.length > 0) {
+      if (state.collector !== undefined) {
+        state.collector.push(...windowViolations);
+      } else {
+        throw new StrictTypeError(windowViolations[0]);
+      }
+    }
   }
 
   if (isReferenceValue(value) && wasVisited(value, schema, state.visited)) {
@@ -577,6 +589,21 @@ function literalName(value: unknown): string {
 
 function isReferenceValue(value: unknown): value is object {
   return (typeof value === 'object' && value !== null) || typeof value === 'function';
+}
+
+function traversesReferenceValue(schema: Schema): boolean {
+  switch (schema.kind) {
+    case 'array':
+    case 'intersection':
+    case 'map':
+    case 'object':
+    case 'set':
+    case 'tuple':
+    case 'union':
+      return true;
+    default:
+      return false;
+  }
 }
 
 function receivedName(value: unknown): string {

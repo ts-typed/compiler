@@ -453,3 +453,92 @@ test('the same plainToInstance-style population also reports a field that was ne
   assert.equal(result.isAggregate, true, JSON.stringify(result));
   assert.deepEqual(result.codes, ['REQUIRED_PROPERTY', 'TYPE_MISMATCH'], JSON.stringify(result));
 });
+
+test('a bad nested @AggregateErrors() child is never silently accepted inside an @AggregateErrors() parent', () => {
+  const result = runMain({
+    'dto.ts': [
+      "import { AggregateErrors } from '@ts-typed/compiler';", '',
+      '@AggregateErrors()', 'export class Profile {', "  bio: string = '';", '  age: number = 0;', '}', '',
+      '@AggregateErrors()', 'export class CreateUserDto {', "  name: string = '';", '  profile: Profile = new Profile();', '}',
+    ].join('\n'),
+    'main.ts': [
+      "import { AggregateStrictTypeError, StrictTypeError } from 'ts-typed';", "import { CreateUserDto, Profile } from './dto';", '',
+      'function createUser(dto: CreateUserDto): void { /* noop */ }', '',
+      'function populate(ctor: any, plain: Record<string, unknown>): any {',
+      '  const instance = new ctor();', '  for (const key of Object.keys(plain)) {', '    instance[key] = plain[key];', '  }', '  return instance;', '}', '',
+      'let caught: any = undefined;', 'try {',
+      "  const profile = populate(Profile, { bio: 7, age: 'old' });",
+      "  const dto = populate(CreateUserDto, { name: 'Ada' });",
+      '  (dto as any).profile = profile;', '  createUser(dto);', '} catch (error) {', '  caught = error;', '}',
+      'process.stdout.write(JSON.stringify({', '  threwSomething: caught !== undefined,', '  isAggregate: caught instanceof AggregateStrictTypeError,', '  isStrictTypeError: caught instanceof StrictTypeError,', '}));',
+    ].join('\n'),
+  });
+
+  assert.equal(result.threwSomething, true, JSON.stringify(result));
+  assert.ok(result.isAggregate || result.isStrictTypeError, JSON.stringify(result));
+});
+
+test('a bad nested @AggregateErrors() child is never silently accepted inside an undecorated parent', () => {
+  const result = runMain({
+    'dto.ts': [
+      "import { AggregateErrors } from '@ts-typed/compiler';", '',
+      '@AggregateErrors()', 'export class Profile {', "  bio: string = '';", '  age: number = 0;', '}', '',
+      'export class CreateUserDto {', "  name: string = '';", '  profile: Profile = new Profile();', '}',
+    ].join('\n'),
+    'main.ts': [
+      "import { StrictTypeError } from 'ts-typed';", "import { CreateUserDto, Profile } from './dto';", '',
+      'function consume(dto: CreateUserDto): void { /* noop */ }', '',
+      'function populate(ctor: any, plain: Record<string, unknown>): any {',
+      '  const instance = new ctor();', '  for (const key of Object.keys(plain)) {', '    instance[key] = plain[key];', '  }', '  return instance;', '}', '',
+      'let caught: any = undefined;', 'try {',
+      "  const profile = populate(Profile, { bio: 7, age: 'old' });",
+      "  const dto = populate(CreateUserDto, { name: 'Ada' });",
+      '  (dto as any).profile = profile;', '  consume(dto);', '} catch (error) {', '  caught = error;', '}',
+      'process.stdout.write(JSON.stringify({ threwSomething: caught !== undefined, isStrictTypeError: caught instanceof StrictTypeError }));',
+    ].join('\n'),
+  });
+
+  assert.equal(result.threwSomething, true, JSON.stringify(result));
+  assert.equal(result.isStrictTypeError, true, JSON.stringify(result));
+});
+
+test('an array of bad nested @AggregateErrors() items is never silently accepted', () => {
+  const result = runMain({
+    'dto.ts': [
+      "import { AggregateErrors } from '@ts-typed/compiler';", '',
+      '@AggregateErrors()', 'export class Item {', "  label: string = '';", '}', '',
+      '@AggregateErrors()', 'export class CreateOrderDto {', '  items: Item[] = [];', '}',
+    ].join('\n'),
+    'main.ts': [
+      "import { AggregateStrictTypeError, StrictTypeError } from 'ts-typed';", "import { CreateOrderDto, Item } from './dto';", '',
+      'function createOrder(dto: CreateOrderDto): void { /* noop */ }', '',
+      'function populate(ctor: any, plain: Record<string, unknown>): any {',
+      '  const instance = new ctor();', '  for (const key of Object.keys(plain)) {', '    instance[key] = plain[key];', '  }', '  return instance;', '}', '',
+      'let caught: any = undefined;', 'try {', '  const badItem = populate(Item, { label: 7 });', '  const dto = populate(CreateOrderDto, {});', '  (dto as any).items = [badItem];', '  createOrder(dto);', '} catch (error) {', '  caught = error;', '}',
+      'process.stdout.write(JSON.stringify({', '  threwSomething: caught !== undefined,', '  isAggregate: caught instanceof AggregateStrictTypeError,', '  isStrictTypeError: caught instanceof StrictTypeError,', '}));',
+    ].join('\n'),
+  });
+
+  assert.equal(result.threwSomething, true, JSON.stringify(result));
+  assert.ok(result.isAggregate || result.isStrictTypeError, JSON.stringify(result));
+});
+
+test('an array parameter of bad @AggregateErrors() instances is never silently accepted', () => {
+  const result = runMain({
+    'dto.ts': [
+      "import { AggregateErrors } from '@ts-typed/compiler';", '',
+      '@AggregateErrors()', 'export class CreateUserDto {', "  name: string = '';", '  age: number = 0;', '}',
+    ].join('\n'),
+    'main.ts': [
+      "import { AggregateStrictTypeError, StrictTypeError } from 'ts-typed';", "import { CreateUserDto } from './dto';", '',
+      'function createUsers(dtos: CreateUserDto[]): void { /* noop */ }', '',
+      'function populate(ctor: any, plain: Record<string, unknown>): any {',
+      '  const instance = new ctor();', '  for (const key of Object.keys(plain)) {', '    instance[key] = plain[key];', '  }', '  return instance;', '}', '',
+      'let caught: any = undefined;', 'try {', "  const dto = populate(CreateUserDto, { name: 42, age: 'old' });", '  createUsers([dto]);', '} catch (error) {', '  caught = error;', '}',
+      'process.stdout.write(JSON.stringify({', '  threwSomething: caught !== undefined,', '  isAggregate: caught instanceof AggregateStrictTypeError,', '  isStrictTypeError: caught instanceof StrictTypeError,', '}));',
+    ].join('\n'),
+  });
+
+  assert.equal(result.threwSomething, true, JSON.stringify(result));
+  assert.ok(result.isAggregate || result.isStrictTypeError, JSON.stringify(result));
+});

@@ -1477,7 +1477,13 @@ function setGuardedValue(state: DataPropertyGuardState, value: unknown, owner: o
       if (violations.length === 0) {
         continue;
       }
-      if (collectIfAggregating(owner, violations[0])) {
+      let collected = false;
+      for (const violation of violations) {
+        if (collectIfAggregating(owner, violation)) {
+          collected = true;
+        }
+      }
+      if (collected) {
         rejected = true;
         continue;
       }
