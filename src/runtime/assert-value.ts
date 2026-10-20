@@ -1,6 +1,7 @@
 import type { AssertionContext } from './assertion-context.interface';
 import { takeAggregateWindowViolations } from './aggregate-window';
 import { SchemaRegistry } from './schema-registry.class';
+import { SchemaMetadataCache } from './schema-metadata-cache.class';
 import { getClassValidationMode } from './strict-class.decorator';
 import type {
   ArraySchema,
@@ -20,6 +21,7 @@ import type { StrictTypeErrorInfo } from './strict-type-error-info.interface';
 interface ValidationState {
   readonly registry: SchemaRegistry;
   readonly visited: Map<object, Set<Schema>>;
+  readonly metadataCache: SchemaMetadataCache;
   /**
    * When set, a violation is pushed here instead of being thrown immediately,
    * and validation continues on to the next sibling (next object property,
@@ -44,6 +46,7 @@ export function assertValue(
   const state: ValidationState = {
     registry: context.registry ?? new SchemaRegistry(),
     visited: new Map<object, Set<Schema>>(),
+    metadataCache: new SchemaMetadataCache(),
   };
 
   validate(schema, value, context, context.propertyPath, state);
@@ -58,6 +61,7 @@ export function assertValueCollecting(
   const state: ValidationState = {
     registry: context.registry ?? new SchemaRegistry(),
     visited: new Map<object, Set<Schema>>(),
+    metadataCache: new SchemaMetadataCache(),
     collector,
   };
 
@@ -366,7 +370,8 @@ function validateObject(
     }
   }
 
-  const declaredKeys = Reflect.ownKeys(schema.properties);
+  const metadata = state.metadataCache.getObjectMetadata(schema);
+  const declaredKeys = metadata.declaredKeys;
 
   for (const key of declaredKeys) {
     const property = schema.properties[key];
@@ -386,10 +391,8 @@ function validateObject(
     validate(property.schema, propertyValue, context, propertyPath, state);
   }
 
-  const knownKeys = new Set<PropertyKey>(declaredKeys);
-
   for (const key of Reflect.ownKeys(value)) {
-    if (knownKeys.has(key)) {
+    if (metadata.declaredKeySet.has(key)) {
       continue;
     }
 
@@ -520,7 +523,11 @@ function cloneState(state: ValidationState): ValidationState {
     visited.set(value, new Set<Schema>(schemas));
   }
 
-  return { registry: state.registry, visited };
+  return {
+    registry: state.registry,
+    visited,
+    metadataCache: state.metadataCache,
+  };
 }
 
 function wasVisited(

@@ -17,6 +17,7 @@ import type {
 } from '../schema.interface';
 import type { Schema } from '../schema.type';
 import { StrictTypeError } from '../strict-type-error.class';
+import { SchemaMetadataCache } from '../schema-metadata-cache.class';
 import type { ValueObjectErrorContext } from '../value-object.class';
 import type { FieldGuardOptions } from './field-guard-options.interface';
 
@@ -38,6 +39,7 @@ interface DataPropertyGuardState {
 
 interface ProtectionState {
   readonly visited: Map<object, Set<Schema>>;
+  readonly metadataCache: SchemaMetadataCache;
 }
 
 interface PreparedContract {
@@ -850,7 +852,10 @@ export function lockRequiredField(instance: object, key: PropertyKey): void {
 }
 
 function createProtectionState(): ProtectionState {
-  return { visited: new Map<object, Set<Schema>>() };
+  return {
+    visited: new Map<object, Set<Schema>>(),
+    metadataCache: new SchemaMetadataCache(),
+  };
 }
 
 function validateContract(
@@ -1098,12 +1103,13 @@ function installObjectProtection(
   context: AssertionContext,
   state: ProtectionState,
 ): void {
-  const declaredKeys = new Set<PropertyKey>(Reflect.ownKeys(schema.properties));
+  const metadata = state.metadataCache.getObjectMetadata(schema);
+  const declaredKeys = metadata.declaredKeySet;
   const ownerContext: AssertionContext = isServerPopulated(value)
     ? { ...context, isServerPopulated: true }
     : context;
 
-  for (const key of declaredKeys) {
+  for (const key of metadata.declaredKeys) {
     const property = schema.properties[key];
     const propertyContext = withTypeErrorResponse(
       nestedContext(ownerContext, key),

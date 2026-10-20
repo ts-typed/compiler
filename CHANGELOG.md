@@ -4,6 +4,12 @@ All notable changes to `@ts-typed/compiler` are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.1.28] - 2026-10-19
+
+### Changed
+
+- **Object-schema metadata is now cached for each runtime traversal.** A `WeakMap` reuses the declared property keys and key set while one `assertValue` or protection walk validates many objects with the same schema (for example, a 10,000-row response). The cache is local to that operation, so it neither retains schemas nor survives into a later boundary crossing. Validation and guard installation remain separate phases, preserving the guarantee that an invalid value is never accepted with a partially installed protection graph.
+
 ## [0.1.27] - 2026-10-19
 
 ### Fixed

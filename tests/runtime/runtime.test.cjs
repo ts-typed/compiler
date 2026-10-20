@@ -28,6 +28,40 @@ test('primitive schemas reject incompatible values without coercion', () => {
   );
 });
 
+test('validating an array reuses object-schema metadata during one traversal', () => {
+  const schema = {
+    kind: 'array',
+    items: {
+      kind: 'object',
+      properties: {
+        id: { schema: numberSchema },
+        email: { schema: stringSchema },
+      },
+    },
+  };
+  const values = Array.from({ length: 4 }, (_, index) => ({
+    id: index,
+    email: `user-${index}@example.com`,
+  }));
+  const originalOwnKeys = Reflect.ownKeys;
+  let schemaPropertyLookups = 0;
+
+  Reflect.ownKeys = (target) => {
+    if (target === schema.items.properties) {
+      schemaPropertyLookups += 1;
+    }
+    return originalOwnKeys(target);
+  };
+
+  try {
+    runtime.assertValue(schema, values, context);
+  } finally {
+    Reflect.ownKeys = originalOwnKeys;
+  }
+
+  assert.equal(schemaPropertyLookups, 1);
+});
+
 test('literal schemas use TypeScript equality for zero and reject impossible NaN literals', () => {
   assert.doesNotThrow(() => runtime.assertValue({ kind: 'literal', value: -0 }, 0, context));
   assert.throws(
