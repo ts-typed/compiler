@@ -177,6 +177,30 @@ test('a ValueObject parameter auto-constructs from a raw string across files, wi
   assert.deepEqual(out, { isObject: true, masked: '***01' });
 });
 
+test('a ValueObject nested in an interface parameter auto-constructs from a raw string', () => {
+  const out = runApp([
+    "import { CPF } from './value-objects';",
+    'interface SearchInput { cpf: CPF; }',
+    'function searchByInput(input: SearchInput): { isObject: boolean; masked: string } {',
+    "  return { isObject: typeof input.cpf === 'object', masked: input.cpf.masked() };",
+    '}',
+    "process.stdout.write(JSON.stringify(searchByInput({ cpf: '12345678901' } as any)));",
+  ]);
+  assert.deepEqual(out, { isObject: true, masked: '***01' });
+});
+
+test('a ValueObject nested in an array property auto-constructs each raw string', () => {
+  const out = runApp([
+    "import { CPF } from './value-objects';",
+    'interface SearchInput { cpfs: CPF[]; }',
+    'function searchByInput(input: SearchInput): string[] {',
+    '  return input.cpfs.map((cpf) => cpf.masked());',
+    '}',
+    "process.stdout.write(JSON.stringify(searchByInput({ cpfs: ['12345678901', '10987654321'] } as any)));",
+  ]);
+  assert.deepEqual(out, ['***01', '***21']);
+});
+
 test('a ValueObject class field auto-constructs when assigned a raw string', () => {
   const out = runApp([
     "import { CPF } from './value-objects';",

@@ -4,6 +4,12 @@ All notable changes to `@ts-typed/compiler` are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.1.30] - 2026-10-20
+
+### Fixed
+
+- **Nested `ValueObject` values are auto-constructed at typed boundaries.** A raw string in an interface/object property, array item, or tuple item now becomes the declared `ValueObject` instance before structural validation. The handler receives the materialized instance, so its domain methods are safe to call without a manual `new` or a separate boundary.
+
 ## [0.1.29] - 2026-10-20
 
 ### Added

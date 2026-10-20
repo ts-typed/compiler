@@ -42,6 +42,12 @@ interface ProtectionState {
   readonly metadataCache: SchemaMetadataCache;
 }
 
+interface ValueObjectMaterializationState {
+  readonly visited: Map<object, Set<Schema>>;
+  readonly materializableSchemas: Map<Schema, boolean>;
+  readonly resolvingSchemas: Set<Schema>;
+}
+
 interface PreparedContract {
   readonly schema: Schema;
   readonly context: AssertionContext;
@@ -76,10 +82,18 @@ export function protectValue(
     allowDirectExtraProperties: false,
   };
   const prepared = prepareContract(contract, value, context.operation);
+  const materializationState = createValueObjectMaterializationState();
+  const materializedValue = schemaCanMaterializeValueObject(
+    prepared.schema,
+    prepared.context,
+    materializationState,
+  )
+    ? materializeValueObjects(prepared.schema, value, prepared.context, materializationState)
+    : value;
 
   const valueObjectCtor = valueObjectCtorOf(prepared.schema, prepared.context);
   if (valueObjectCtor !== undefined) {
-    return autoConstructValueObject(valueObjectCtor, value, prepared.context);
+    return autoConstructValueObject(valueObjectCtor, materializedValue, prepared.context);
   }
 
   const resolvedForAggregation = resolveReference(prepared.schema, prepared.context);
@@ -105,35 +119,35 @@ export function protectValue(
 
   if (
     prepared.context.contractKind === 'parameter' &&
-    isReferenceValue(value) &&
-    !Array.isArray(value) &&
-    (schemaRequestsAggregation || isAggregateErrorsEnabled(value))
+    isReferenceValue(materializedValue) &&
+    !Array.isArray(materializedValue) &&
+    (schemaRequestsAggregation || isAggregateErrorsEnabled(materializedValue))
   ) {
-    const windowViolations = takeAggregateWindowViolations(value) ?? [];
-    const structuralViolations = assertValueCollecting(prepared.schema, value, prepared.context);
+    const windowViolations = takeAggregateWindowViolations(materializedValue) ?? [];
+    const structuralViolations = assertValueCollecting(prepared.schema, materializedValue, prepared.context);
     const violations = [...windowViolations, ...structuralViolations];
     if (violations.length > 0) {
       throw new AggregateStrictTypeError(violations);
     }
   } else {
-    assertValue(prepared.schema, value, prepared.context);
+    assertValue(prepared.schema, materializedValue, prepared.context);
   }
-  installProtection(prepared.schema, value, prepared.context, createProtectionState());
+  installProtection(prepared.schema, materializedValue, prepared.context, createProtectionState());
   if (context.enforceMutationGuards === true) {
-    if (Array.isArray(value)) {
-      return guardArrayMutations(prepared.schema, value, prepared.context);
+    if (Array.isArray(materializedValue)) {
+      return guardArrayMutations(prepared.schema, materializedValue, prepared.context);
     }
-    if (value instanceof Map) {
-      return guardMapMutations(prepared.schema, value, prepared.context);
+    if (materializedValue instanceof Map) {
+      return guardMapMutations(prepared.schema, materializedValue, prepared.context);
     }
-    if (value instanceof Set) {
-      return guardSetMutations(prepared.schema, value, prepared.context);
+    if (materializedValue instanceof Set) {
+      return guardSetMutations(prepared.schema, materializedValue, prepared.context);
     }
-    if (typeof value === 'object' && value !== null) {
-      return guardObjectMutations(prepared.schema, value, prepared.context);
+    if (typeof materializedValue === 'object' && materializedValue !== null) {
+      return guardObjectMutations(prepared.schema, materializedValue, prepared.context);
     }
   }
-  return value;
+  return materializedValue;
 }
 
 /**
@@ -181,6 +195,204 @@ export function autoConstructValueObject(
   };
   const Constructor = ctor as new (raw: string, context?: ValueObjectErrorContext) => object;
   return new Constructor(value as string, valueObjectContext);
+}
+
+/**
+ * Replaces raw strings with their ValueObject instances inside a structured
+ * value before its schema is asserted. A function parameter remains the same
+ * object reference, so code after the compiler-inserted boundary guard sees
+ * the materialized instance at its declared property.
+ */
+function materializeValueObjects(
+  schema: Schema,
+  value: unknown,
+  context: AssertionContext,
+  state: ValueObjectMaterializationState,
+): unknown {
+  const resolved = resolveReference(schema, context);
+  const valueObjectCtor = resolved.kind === 'object' ? resolved.valueObjectCtor : undefined;
+  if (valueObjectCtor !== undefined) {
+    return autoConstructValueObject(valueObjectCtor, value, context);
+  }
+
+  if (!schemaCanMaterializeValueObject(resolved, context, state)) {
+    return value;
+  }
+
+  switch (resolved.kind) {
+    case 'object':
+      materializeObjectValueObjects(resolved, value, context, state);
+      return value;
+    case 'array':
+      if (Array.isArray(value)) {
+        for (let index = 0; index < value.length; index += 1) {
+          const item = value[index];
+          const materializedItem = materializeValueObjects(
+            resolved.items,
+            item,
+            { ...context, propertyPath: `${context.propertyPath}[${index}]` },
+            state,
+          );
+          if (materializedItem !== item) {
+            Reflect.set(value, index, materializedItem);
+          }
+        }
+      }
+      return value;
+    case 'tuple':
+      if (Array.isArray(value)) {
+        for (let index = 0; index < value.length; index += 1) {
+          const itemSchema = index < resolved.items.length
+            ? resolved.items[index]
+            : resolved.rest === false || resolved.rest === undefined
+              ? undefined
+              : resolved.rest;
+          if (itemSchema === undefined) {
+            continue;
+          }
+          const item = value[index];
+          const materializedItem = materializeValueObjects(
+            itemSchema,
+            item,
+            { ...context, propertyPath: `${context.propertyPath}[${index}]` },
+            state,
+          );
+          if (materializedItem !== item) {
+            Reflect.set(value, index, materializedItem);
+          }
+        }
+      }
+      return value;
+    case 'intersection':
+      for (const member of resolved.schemas) {
+        materializeValueObjects(member, value, context, state);
+      }
+      return value;
+    case 'ref':
+    case 'union':
+    case 'map':
+    case 'set':
+    case 'literal':
+    case 'never':
+    case 'primitive':
+    case 'date':
+    case 'function':
+    case 'templateLiteral':
+    case 'unknown':
+      return value;
+  }
+}
+
+function materializeObjectValueObjects(
+  schema: ObjectSchema,
+  value: unknown,
+  context: AssertionContext,
+  state: ValueObjectMaterializationState,
+): void {
+  if (!isReferenceValue(value) || Array.isArray(value) || wasMaterialized(value, schema, state)) {
+    return;
+  }
+
+  for (const key of Reflect.ownKeys(schema.properties)) {
+    const property = schema.properties[key];
+    if (!Reflect.has(value, key)) {
+      continue;
+    }
+    const propertyValue = Reflect.get(value, key);
+    if (property.deferredAssignment === true && propertyValue === undefined) {
+      continue;
+    }
+    const materializedValue = materializeValueObjects(
+      property.schema,
+      propertyValue,
+      nestedContext(context, key),
+      state,
+    );
+    if (materializedValue !== propertyValue) {
+      Reflect.set(value, key, materializedValue);
+    }
+  }
+
+  if (schema.index === undefined) {
+    return;
+  }
+
+  for (const key of Reflect.ownKeys(value)) {
+    if (Object.hasOwn(schema.properties, key)) {
+      continue;
+    }
+    const propertyValue = Reflect.get(value, key);
+    const materializedValue = materializeValueObjects(
+      schema.index,
+      propertyValue,
+      nestedContext(context, key),
+      state,
+    );
+    if (materializedValue !== propertyValue) {
+      Reflect.set(value, key, materializedValue);
+    }
+  }
+}
+
+function createValueObjectMaterializationState(): ValueObjectMaterializationState {
+  return {
+    visited: new Map<object, Set<Schema>>(),
+    materializableSchemas: new Map<Schema, boolean>(),
+    resolvingSchemas: new Set<Schema>(),
+  };
+}
+
+function schemaCanMaterializeValueObject(
+  schema: Schema,
+  context: AssertionContext,
+  state: ValueObjectMaterializationState,
+): boolean {
+  const cached = state.materializableSchemas.get(schema);
+  if (cached !== undefined) {
+    return cached;
+  }
+  if (state.resolvingSchemas.has(schema)) {
+    return false;
+  }
+
+  state.resolvingSchemas.add(schema);
+  const resolved = resolveReference(schema, context);
+  const canMaterialize = resolved.kind === 'object'
+    ? resolved.valueObjectCtor !== undefined ||
+      Reflect.ownKeys(resolved.properties).some((key) =>
+        schemaCanMaterializeValueObject(resolved.properties[key].schema, context, state),
+      ) ||
+      (resolved.index !== undefined && schemaCanMaterializeValueObject(resolved.index, context, state))
+    : resolved.kind === 'array'
+      ? schemaCanMaterializeValueObject(resolved.items, context, state)
+      : resolved.kind === 'tuple'
+        ? resolved.items.some((item) => schemaCanMaterializeValueObject(item, context, state)) ||
+          (resolved.rest !== undefined &&
+            resolved.rest !== false &&
+            schemaCanMaterializeValueObject(resolved.rest, context, state))
+        : resolved.kind === 'intersection'
+          ? resolved.schemas.some((member) => schemaCanMaterializeValueObject(member, context, state))
+          : false;
+  state.resolvingSchemas.delete(schema);
+  state.materializableSchemas.set(schema, canMaterialize);
+  if (resolved !== schema) {
+    state.materializableSchemas.set(resolved, canMaterialize);
+  }
+  return canMaterialize;
+}
+
+function wasMaterialized(
+  value: object,
+  schema: Schema,
+  state: ValueObjectMaterializationState,
+): boolean {
+  const schemas = state.visited.get(value) ?? new Set<Schema>();
+  if (schemas.has(schema)) {
+    return true;
+  }
+  schemas.add(schema);
+  state.visited.set(value, schemas);
+  return false;
 }
 
 /**
