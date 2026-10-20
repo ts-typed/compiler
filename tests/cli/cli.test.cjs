@@ -1,7 +1,7 @@
 'use strict';
 
 const assert = require('node:assert/strict');
-const { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, readFileSync, existsSync } = require('node:fs');
+const { chmodSync, mkdtempSync, mkdirSync, writeFileSync, symlinkSync, readFileSync, existsSync } = require('node:fs');
 const { execFileSync } = require('node:child_process');
 const { tmpdir } = require('node:os');
 const { join } = require('node:path');
@@ -264,8 +264,22 @@ test('nest start accepts watch and debug flags from conventional Nest scripts', 
 test('npm run build and npm start execute the Nest wrapper installed by init', async () => {
   const { projectRoot } = writeConsumerProject();
   const binaryDirectory = join(projectRoot, 'node_modules', '.bin');
+  const binaryPath = join(binaryDirectory, 'ts-typed');
   mkdirSync(binaryDirectory, { recursive: true });
-  symlinkSync(join(PACKAGE_DIST, 'cli', 'index.js'), join(binaryDirectory, 'ts-typed'));
+  writeFileSync(
+    binaryPath,
+    [
+      `#!${process.execPath}`,
+      `const { runCli } = require(${JSON.stringify(join(PACKAGE_DIST, 'cli', 'index.js'))});`,
+      'void runCli(process.argv.slice(2)).then((result) => {',
+      '  for (const line of result.stdout) process.stdout.write(`${line}\\n`);',
+      '  for (const line of result.stderr) process.stderr.write(`${line}\\n`);',
+      '  process.exitCode = result.exitCode;',
+      '});',
+      '',
+    ].join('\n'),
+  );
+  chmodSync(binaryPath, 0o755);
   writeFileSync(
     join(projectRoot, 'nest-cli.json'),
     JSON.stringify({ sourceRoot: 'src', compilerOptions: { builder: 'tsc', tsConfigPath: 'tsconfig.json' } }),
