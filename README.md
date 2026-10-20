@@ -22,6 +22,7 @@ Full behavior spec: [`docs/SPEC.md`](https://github.com/ts-typed/ts-typed/blob/m
 - [Decorators](#decorators)
 - [Generics](#generics)
 - [Path aliases (`tsconfig.json` `paths`)](#path-aliases-tsconfigjson-paths)
+- [Performance](#performance)
 - [Known limitations](#known-limitations)
 
 ## How it works
@@ -97,6 +98,12 @@ Both `enforceClosedInstances` and `enforceMutationGuards` are off by default bec
 - **`enforceMutationGuards`** wraps the value in a `Proxy`, which has a real per-mutation validation cost and changes the value's identity (the returned value is a proxy, not the original reference) — acceptable for many use cases, not something to turn on blindly everywhere.
 
 **The governing rule for any ts-typed config flag that overlaps with another library's own setting: ts-typed's config decides the behavior, and the rest of your stack must be configured to agree with it.** A mismatch (e.g. `enforceClosedInstances: true` with `class-transformer` still doing copy-then-strip) is an application configuration bug, not a ts-typed bug.
+
+## Performance
+
+`assertValue` validates a value at a boundary; `protectValue` validates and installs the deep mutation protection required by that boundary. The second operation necessarily does more work for large object graphs. A local TypeORM/Express/Nest stress battery with 10,000 entities found a median 6.20 ms for validating a response array and 47.1 ms for projecting away a password field and protecting that array. This intentionally extreme response shape is not a production capacity promise.
+
+Use bounded pagination/cursors before optimizing a path that sends thousands of records at once. Keep `enforceMutationGuards` opt-in: proxies add per-mutation cost and change identity. The full methodology, reproducible harness, bottleneck study and reference results are in [the project performance notes](https://github.com/ts-typed/ts-typed/blob/main/docs/performance.md).
 
 ## Decorators
 
