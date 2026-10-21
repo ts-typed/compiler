@@ -1,9 +1,23 @@
-# @ts-typed/compiler
+<p align="center">
+  <a href="https://ts-typed.com" target="_blank" rel="noopener noreferrer">
+    <img src=".github/logo.svg" alt="ts-typed" width="260" />
+  </a>
+</p>
 
-`@ts-typed/compiler` instruments a TypeScript project so runtime values are checked against the same types the compiler already knows about. No schema definitions, no decorators required for the basics — write normal TypeScript, and a transform pass inserts the runtime checks for you.
+<p align="center">
+  <a href="https://www.npmjs.com/package/@ts-typed/core"><img src="https://img.shields.io/npm/v/@ts-typed/core.svg" alt="npm version"></a>
+  <a href="https://www.npmjs.com/package/@ts-typed/core"><img src="https://img.shields.io/npm/dm/@ts-typed/core.svg" alt="npm downloads"></a>
+  <a href="https://github.com/ts-typed/ts-typed/actions/workflows/ci.yml"><img src="https://github.com/ts-typed/ts-typed/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <img src="https://img.shields.io/badge/node-%3E%3D18-339933?logo=node.js&logoColor=white" alt="Node >=18">
+  <a href="https://github.com/ts-typed/ts-typed/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="License"></a>
+</p>
+
+# @ts-typed/core
+
+`@ts-typed/core` instruments a TypeScript project so runtime values are checked against the same types the compiler already knows about. No schema definitions, no decorators required for the basics — write normal TypeScript, and a transform pass inserts the runtime checks for you.
 
 ```bash
-npm install --save-dev @ts-typed/compiler
+npm install --save-dev @ts-typed/core
 npx ts-typed init
 npx ts-typed build
 ```
@@ -71,7 +85,7 @@ class StrictTypeError extends TypeError {
 
 ## Configuration reference
 
-`typets.config.json` (schema at `./node_modules/@ts-typed/compiler/schema.json`):
+`typets.config.json` (schema at `./node_modules/@ts-typed/core/schema.json`):
 
 | Key | Default | Meaning |
 |---|---|---|
@@ -106,7 +120,7 @@ Both `enforceClosedInstances` and `enforceMutationGuards` are off by default bec
 Install the compiler and Nest adapter, then initialize from the root of a conventional Nest project:
 
 ```bash
-npm install --save-dev @ts-typed/compiler @ts-typed/nestjs
+npm install --save-dev @ts-typed/core @ts-typed/nestjs
 npx ts-typed init
 ```
 
@@ -136,7 +150,7 @@ Use bounded pagination/cursors before optimizing a path that sends thousands of 
 
 ## Decorators
 
-Import from `@ts-typed/compiler`.
+Import from `@ts-typed/core`.
 
 ### `AllowExtraProperties()`
 
@@ -156,7 +170,7 @@ Class decorator. Overrides `compiler.strictClass` for one class: `StrictClass()`
 By default ts-typed is fail-fast: the first bad field throws and validation stops there (see [Known limitations](#known-limitations)). A class decorated with `AggregateErrors()` changes that at two points: at the parameter boundary, when a value crossing a typed function/method parameter is declared as that class (the DTO-in-an-HTTP-body case — the headline case is a plain object literal that was never actually instantiated, as below), and on field writes to a decorated instance while its aggregate window is open (the writes between construction and that first parameter crossing; see below). At either point, every violation anywhere in it, at any depth, is collected into one `AggregateStrictTypeError` instead:
 
 ```ts
-import { AggregateErrors, AggregateStrictTypeError } from '@ts-typed/compiler';
+import { AggregateErrors, AggregateStrictTypeError } from '@ts-typed/core';
 
 @AggregateErrors()
 class CreateUserDto {

@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="260" height="72" viewBox="0 0 260 72" role="img" aria-label="ts-typed">
+  <rect x="1" y="1" width="258" height="70" rx="14" fill="#1E293B" stroke="#3178C6" stroke-width="2"/>
+  <text x="20" y="47" font-family="SFMono-Regular, Consolas, 'Liberation Mono', Menlo, monospace" font-size="28" font-weight="700" fill="#3178C6">&lt;</text>
+  <text x="42" y="47" font-family="SFMono-Regular, Consolas, 'Liberation Mono', Menlo, monospace" font-size="28" font-weight="700" fill="#F8FAFC">ts-typed</text>
+  <text x="184" y="47" font-family="SFMono-Regular, Consolas, 'Liberation Mono', Menlo, monospace" font-size="28" font-weight="700" fill="#3178C6">/&gt;</text>
+</svg>
