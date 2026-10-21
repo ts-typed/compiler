@@ -3,7 +3,12 @@ import { AggregateStrictTypeError } from '../aggregate-strict-type-error.class';
 import { isExtraPropertiesAllowed } from '../allow-extra-properties.decorator';
 import { isServerPopulated } from '../server-populated.decorator';
 import { getTypeErrorResponse } from '../type-error-response.decorator';
-import { assertValue, assertValueCollecting } from '../assert-value';
+import {
+  assertValue,
+  assertValueCollecting,
+  assertValueCollectingWithSession,
+  assertValueWithSession,
+} from '../assert-value';
 import { collectIfAggregating, isAggregating, takeAggregateWindowViolations } from '../aggregate-window';
 import type { AssertionContext } from '../assertion-context.interface';
 import type {
@@ -18,6 +23,8 @@ import type {
 import type { Schema } from '../schema.type';
 import { StrictTypeError } from '../strict-type-error.class';
 import { SchemaMetadataCache } from '../schema-metadata-cache.class';
+import { createTraversalSession } from '../traversal-session';
+import type { ProtectionPlanEntry } from '../traversal-session';
 import type { ValueObjectErrorContext } from '../value-object.class';
 import type { FieldGuardOptions } from './field-guard-options.interface';
 
@@ -129,6 +136,7 @@ export function protectValue(
   )
     ? materializeValueObjects(prepared.schema, value, prepared.context, materializationState)
     : value;
+  const session = createTraversalSession(prepared.context);
 
   const valueObjectCtor = valueObjectCtorOf(prepared.schema, prepared.context);
   if (valueObjectCtor !== undefined) {
@@ -163,15 +171,20 @@ export function protectValue(
     (schemaRequestsAggregation || isAggregateErrorsEnabled(materializedValue))
   ) {
     const windowViolations = takeAggregateWindowViolations(materializedValue) ?? [];
-    const structuralViolations = assertValueCollecting(prepared.schema, materializedValue, prepared.context);
+    const structuralViolations = assertValueCollectingWithSession(
+      prepared.schema,
+      materializedValue,
+      prepared.context,
+      session,
+    );
     const violations = [...windowViolations, ...structuralViolations];
     if (violations.length > 0) {
       throw new AggregateStrictTypeError(violations);
     }
   } else {
-    assertValue(prepared.schema, materializedValue, prepared.context);
+    assertValueWithSession(prepared.schema, materializedValue, prepared.context, session);
   }
-  installProtection(prepared.schema, materializedValue, prepared.context, createProtectionState());
+  installProtectionFromPlan(session.protectionPlan, session.metadataCache);
   if (context.enforceMutationGuards === true) {
     if (Array.isArray(materializedValue)) {
       return guardArrayMutations(prepared.schema, materializedValue, prepared.context);
@@ -1103,10 +1116,10 @@ export function lockRequiredField(instance: object, key: PropertyKey): void {
   }
 }
 
-function createProtectionState(): ProtectionState {
+function createProtectionState(metadataCache = new SchemaMetadataCache()): ProtectionState {
   return {
     visited: new Map<object, Set<Schema>>(),
-    metadataCache: new SchemaMetadataCache(),
+    metadataCache,
   };
 }
 
@@ -1349,11 +1362,47 @@ function installProtection(
   }
 }
 
+function installProtectionFromPlan(
+  plan: readonly ProtectionPlanEntry[],
+  metadataCache: SchemaMetadataCache,
+): void {
+  const state = createProtectionState(metadataCache);
+  for (const entry of plan) {
+    installProtectionTask(entry, state);
+  }
+}
+
+function installProtectionTask(
+  entry: ProtectionPlanEntry,
+  state: ProtectionState,
+): void {
+  const resolved = resolveReference(entry.schema, entry.context);
+  if (wasVisited(entry.value, resolved, state)) {
+    return;
+  }
+
+  switch (resolved.kind) {
+    case 'object':
+      if (!Array.isArray(entry.value)) {
+        installObjectProtection(resolved, entry.value, entry.context, state, false);
+      }
+      return;
+    case 'intersection':
+      for (const candidate of resolved.schemas) {
+        installProtectionTask({ ...entry, schema: candidate }, state);
+      }
+      return;
+    default:
+      return;
+  }
+}
+
 function installObjectProtection(
   schema: ObjectSchema,
   value: object,
   context: AssertionContext,
   state: ProtectionState,
+  protectNested = true,
 ): void {
   const metadata = state.metadataCache.getObjectMetadata(schema);
   const declaredKeys = metadata.declaredKeySet;
@@ -1378,6 +1427,7 @@ function installObjectProtection(
         value,
         key,
         state,
+        protectNested,
       );
       continue;
     }
@@ -1394,6 +1444,7 @@ function installObjectProtection(
       property.readonly === true,
       propertyContext,
       state,
+      protectNested,
     );
   }
 
@@ -1416,6 +1467,7 @@ function installObjectProtection(
         value,
         key,
         state,
+        protectNested,
       );
       continue;
     }
@@ -1431,6 +1483,7 @@ function installObjectProtection(
       false,
       propertyContext,
       state,
+      protectNested,
     );
   }
 }
@@ -1443,6 +1496,7 @@ function addContractAndProtect(
   owner: object,
   key: PropertyKey,
   state: ProtectionState,
+  protectNested = true,
 ): void {
   const contract: GuardContract = {
     schema,
@@ -1457,7 +1511,9 @@ function addContractAndProtect(
     lockStructuralReadonly(owner, key);
   }
   const prepared = prepareContract(contract, installedGuard.value, context.operation);
-  installProtection(prepared.schema, installedGuard.value, prepared.context, state);
+  if (protectNested) {
+    installProtection(prepared.schema, installedGuard.value, prepared.context, state);
+  }
 }
 
 function installKnownDataProperty(
@@ -1468,6 +1524,7 @@ function installKnownDataProperty(
   readonlyField: boolean,
   context: AssertionContext,
   state: ProtectionState,
+  protectNested = true,
 ): void {
   const contract: GuardContract = {
     schema,
@@ -1479,7 +1536,9 @@ function installKnownDataProperty(
   };
   const prepared = prepareContract(contract, descriptor.value, context.operation);
 
-  installProtection(prepared.schema, descriptor.value, prepared.context, state);
+  if (protectNested) {
+    installProtection(prepared.schema, descriptor.value, prepared.context, state);
+  }
   installDataGuard(owner, key, descriptor.value, true, descriptor, contract, readonlyField);
   if (readonlyField) {
     lockStructuralReadonly(owner, key);

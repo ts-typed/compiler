@@ -5,6 +5,8 @@ const test = require('node:test');
 
 const runtime = require('../../dist/runtime');
 const guards = require('../../dist/runtime/guards');
+const { assertValueWithSession } = require('../../dist/runtime/assert-value');
+const { createTraversalSession } = require('../../dist/runtime/traversal-session');
 
 const numberSchema = { kind: 'primitive', name: 'number' };
 const stringSchema = { kind: 'primitive', name: 'string' };
@@ -13,6 +15,25 @@ const context = {
   operation: 'initialize',
   propertyPath: 'Profile.value',
 };
+
+test('records one reusable protection task for each reference visited during validation', () => {
+  const schema = {
+    kind: 'array',
+    items: {
+      kind: 'object',
+      properties: { count: { schema: numberSchema } },
+    },
+  };
+  const value = [{ count: 1 }, { count: 2 }];
+  const session = createTraversalSession(context);
+
+  assertValueWithSession(schema, value, context, session);
+
+  assert.equal(session.protectionPlan.length, 3);
+  assert.strictEqual(session.protectionPlan[0].value, value);
+  assert.strictEqual(session.protectionPlan[1].value, value[0]);
+  assert.strictEqual(session.protectionPlan[2].value, value[1]);
+});
 
 test('protectValue returns the exact primitive or object identity after validation', () => {
   const value = { name: 'Ada' };

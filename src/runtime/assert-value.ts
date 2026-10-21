@@ -17,11 +17,14 @@ import type {
 import type { PrimitiveName, Schema } from './schema.type';
 import { StrictTypeError } from './strict-type-error.class';
 import type { StrictTypeErrorInfo } from './strict-type-error-info.interface';
+import { createTraversalSession } from './traversal-session';
+import type { TraversalSession } from './traversal-session';
 
 interface ValidationState {
   readonly registry: SchemaRegistry;
   readonly visited: Map<object, Set<Schema>>;
   readonly metadataCache: SchemaMetadataCache;
+  readonly protectionPlan?: TraversalSession['protectionPlan'];
   /**
    * When set, a violation is pushed here instead of being thrown immediately,
    * and validation continues on to the next sibling (next object property,
@@ -43,10 +46,21 @@ export function assertValue(
   value: unknown,
   context: AssertionContext,
 ): void {
+  assertValueWithSession(schema, value, context, createTraversalSession(context));
+}
+
+/** Internal form used when validation is followed by protection. */
+export function assertValueWithSession(
+  schema: Schema,
+  value: unknown,
+  context: AssertionContext,
+  session: TraversalSession,
+): void {
   const state: ValidationState = {
-    registry: context.registry ?? new SchemaRegistry(),
+    registry: session.registry,
     visited: new Map<object, Set<Schema>>(),
-    metadataCache: new SchemaMetadataCache(),
+    metadataCache: session.metadataCache,
+    protectionPlan: session.protectionPlan,
   };
 
   validate(schema, value, context, context.propertyPath, state);
@@ -57,11 +71,21 @@ export function assertValueCollecting(
   value: unknown,
   context: AssertionContext,
 ): StrictTypeErrorInfo[] {
+  return assertValueCollectingWithSession(schema, value, context, createTraversalSession(context));
+}
+
+export function assertValueCollectingWithSession(
+  schema: Schema,
+  value: unknown,
+  context: AssertionContext,
+  session: TraversalSession,
+): StrictTypeErrorInfo[] {
   const collector: StrictTypeErrorInfo[] = [];
   const state: ValidationState = {
-    registry: context.registry ?? new SchemaRegistry(),
+    registry: session.registry,
     visited: new Map<object, Set<Schema>>(),
-    metadataCache: new SchemaMetadataCache(),
+    metadataCache: session.metadataCache,
+    protectionPlan: session.protectionPlan,
     collector,
   };
 
@@ -94,6 +118,14 @@ function validate(
 
   if (isReferenceValue(value) && wasVisited(value, schema, state.visited)) {
     return;
+  }
+
+  if (state.protectionPlan !== undefined && isReferenceValue(value)) {
+    state.protectionPlan.push({
+      schema,
+      value,
+      context: { ...context, propertyPath: path },
+    });
   }
 
   switch (schema.kind) {
@@ -505,8 +537,12 @@ function succeeds(
   path: string,
   state: ValidationState,
 ): boolean {
+  const candidateState = cloneState(state);
   try {
-    validate(schema, value, context, path, cloneState(state));
+    validate(schema, value, context, path, candidateState);
+    if (state.protectionPlan !== undefined && candidateState.protectionPlan !== undefined) {
+      state.protectionPlan.push(...candidateState.protectionPlan);
+    }
     return true;
   } catch (error: unknown) {
     if (error instanceof StrictTypeError) {
@@ -527,6 +563,7 @@ function cloneState(state: ValidationState): ValidationState {
     registry: state.registry,
     visited,
     metadataCache: state.metadataCache,
+    protectionPlan: state.protectionPlan === undefined ? undefined : [],
   };
 }
 
