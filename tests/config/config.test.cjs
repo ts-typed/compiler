@@ -10,6 +10,8 @@ const {
   configureProjectScripts,
   detectProjectKind,
   initializeProject,
+  installDependency,
+  isDependencyInstalled,
   loadConfig,
 } = require('../../dist/config');
 
@@ -562,4 +564,90 @@ test('configureProjectScripts reports a clear message and does not throw when pa
 
   assert.equal(result.changed, false);
   assert.match(result.message, /Could not find package\.json/);
+});
+
+test('isDependencyInstalled checks both dependencies and devDependencies', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ts-typed-isdep-'));
+  fs.writeFileSync(
+    path.join(root, 'package.json'),
+    JSON.stringify({ dependencies: { express: '^5.0.0' }, devDependencies: { typescript: '^5.9.0' } }),
+  );
+
+  assert.equal(await isDependencyInstalled(root, 'express'), true);
+  assert.equal(await isDependencyInstalled(root, 'typescript'), true);
+  assert.equal(await isDependencyInstalled(root, '@ts-typed/express'), false);
+});
+
+test('isDependencyInstalled is false when package.json is missing', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ts-typed-isdep-missing-'));
+
+  assert.equal(await isDependencyInstalled(root, 'express'), false);
+});
+
+test('installDependency picks npm by default (no lockfile present)', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ts-typed-install-npm-'));
+  fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({}));
+  const calls = [];
+
+  const result = await installDependency(root, '@ts-typed/express', (command, args, cwd) => {
+    calls.push({ command, args, cwd });
+  });
+
+  assert.equal(result.installed, true);
+  assert.deepEqual(calls, [{ command: 'npm', args: ['install', '@ts-typed/express'], cwd: root }]);
+});
+
+test('installDependency picks yarn when yarn.lock is present', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ts-typed-install-yarn-'));
+  fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({}));
+  fs.writeFileSync(path.join(root, 'yarn.lock'), '');
+  const calls = [];
+
+  await installDependency(root, '@ts-typed/validators', (command, args, cwd) => {
+    calls.push({ command, args, cwd });
+  });
+
+  assert.deepEqual(calls, [{ command: 'yarn', args: ['add', '@ts-typed/validators'], cwd: root }]);
+});
+
+test('installDependency picks pnpm when pnpm-lock.yaml is present', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ts-typed-install-pnpm-'));
+  fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({}));
+  fs.writeFileSync(path.join(root, 'pnpm-lock.yaml'), '');
+  const calls = [];
+
+  await installDependency(root, '@ts-typed/nestjs', (command, args, cwd) => {
+    calls.push({ command, args, cwd });
+  });
+
+  assert.deepEqual(calls, [{ command: 'pnpm', args: ['add', '@ts-typed/nestjs'], cwd: root }]);
+});
+
+test('installDependency does nothing and reports no-op when the package is already installed', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ts-typed-install-already-'));
+  fs.writeFileSync(
+    path.join(root, 'package.json'),
+    JSON.stringify({ dependencies: { '@ts-typed/express': '^0.1.0' } }),
+  );
+  let called = false;
+
+  const result = await installDependency(root, '@ts-typed/express', () => {
+    called = true;
+  });
+
+  assert.equal(called, false);
+  assert.equal(result.installed, false);
+  assert.match(result.message, /already installed/);
+});
+
+test('installDependency surfaces a failure from the runner as a non-throwing result', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ts-typed-install-fail-'));
+  fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({}));
+
+  const result = await installDependency(root, '@ts-typed/express', () => {
+    throw new Error('network unreachable');
+  });
+
+  assert.equal(result.installed, false);
+  assert.match(result.message, /network unreachable/);
 });

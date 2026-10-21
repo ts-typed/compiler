@@ -18,3 +18,5 @@ export type {
   ProjectConfig,
 } from './config.interface';
 export type { ConfigOverrides, DeepPartial } from './config.type';
+export { installDependency, isDependencyInstalled } from './install-dependency';
+export type { InstallDependencyResult } from './install-dependency';
