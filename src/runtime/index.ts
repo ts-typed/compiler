@@ -39,7 +39,13 @@ export type {
 } from './schema.interface';
 export { assertValue, assertValueCollecting } from './assert-value';
 export type { AssertionContext } from './assertion-context.interface';
-export { protectValue, installFieldGuard, lockReadonlyField, lockRequiredField } from './guards';
+export {
+  protectValue,
+  installFieldGuard,
+  lockReadonlyField,
+  lockRequiredField,
+  withDeferredReadonlyLock,
+} from './guards';
 export { protectOptimizedImmutableValue } from './protect-optimized-immutable-value';
 export type { FieldGuardOptions } from './guards';
 export type { TTOptImmut } from './tt-opt-immut.type';

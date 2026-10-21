@@ -319,6 +319,20 @@ function createNamedCandidate(
   enforcePrivate: boolean,
 ): ContractCandidate {
   if (!typescript.isIdentifier(name) && !typescript.isStringLiteral(name) && !typescript.isNumericLiteral(name)) {
+    // A destructured parameter has a stable runtime binding: the argument value itself,
+    // before it is torn apart into the pattern. The transformer guards that whole value
+    // (see `createParameterGuards`), so its type is resolved like any other contract
+    // instead of being marked unsupported. Destructured variable/property names have no
+    // equivalent single-value binding and stay unsupported here.
+    if (kind === 'parameter') {
+      return {
+        node,
+        locationNode: name,
+        name: name.getText(),
+        kind,
+        type: checker.getTypeAtLocation(node),
+      };
+    }
     return {
       node,
       locationNode: name,

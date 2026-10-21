@@ -1089,9 +1089,75 @@ export function installFieldGuard(
  */
 export function lockReadonlyField(instance: object, key: PropertyKey): void {
   const guard = getInstalledGuard(instance, key);
-  if (guard !== undefined) {
-    guard.isLocked = true;
+  if (guard === undefined) {
+    return;
   }
+  if (deferredReadonlyLockDepth > 0) {
+    pendingReadonlyLocks.push({ instance, key });
+    return;
+  }
+  guard.isLocked = true;
+}
+
+let deferredReadonlyLockDepth = 0;
+const pendingReadonlyLocks: { instance: object; key: PropertyKey }[] = [];
+
+/**
+ * Runs `fn` with every `readonly` field lock in this call tree deferred:
+ * a constructor that finishes while `fn` is still running has its `readonly`
+ * fields left writable, and the lock is applied only once the OUTERMOST
+ * `withDeferredReadonlyLock` call returns. This is the sanctioned escape
+ * hatch for framework integrations — like `class-transformer`'s
+ * `plainToInstance`, which constructs an instance with no arguments and then
+ * assigns payload keys onto it as separate, later property writes — that
+ * need to populate a `readonly` field *after* construction as part of one
+ * logical "build this instance" operation. Code that merely holds a
+ * reference to an already-built instance and writes to it later, outside
+ * this call, is unaffected and still rejected by the lock as soon as it is
+ * applied.
+ */
+export function withDeferredReadonlyLock<T>(fn: () => T): T {
+  deferredReadonlyLockDepth += 1;
+  const settle = (): void => {
+    deferredReadonlyLockDepth -= 1;
+    if (deferredReadonlyLockDepth === 0 && pendingReadonlyLocks.length > 0) {
+      const pending = pendingReadonlyLocks.splice(0, pendingReadonlyLocks.length);
+      for (const { instance, key } of pending) {
+        const guard = getInstalledGuard(instance, key);
+        if (guard !== undefined) {
+          guard.isLocked = true;
+        }
+      }
+    }
+  };
+
+  let result: T;
+  try {
+    result = fn();
+  } catch (error) {
+    settle();
+    throw error;
+  }
+
+  // `fn` may be async (e.g. a NestJS pipe's `transform`), in which case the
+  // readonly writes it triggers happen synchronously inside it, well before
+  // the returned promise settles — so deferring the sweep until then still
+  // re-locks the fields before `fn`'s own caller observes the result.
+  if (result instanceof Promise) {
+    return result.then(
+      (value) => {
+        settle();
+        return value;
+      },
+      (error: unknown) => {
+        settle();
+        throw error;
+      },
+    ) as T;
+  }
+
+  settle();
+  return result;
 }
 
 /**

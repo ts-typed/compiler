@@ -771,7 +771,7 @@ function isValueObjectRefSchema(schema: Schema, state: FileTransformState): bool
 }
 
 function createParameterGuards(
-  parameters: readonly ts.ParameterDeclaration[],
+  parameters: ts.ParameterDeclaration[],
   originalParameters: readonly ts.ParameterDeclaration[],
   state: FileTransformState,
   factory: ts.NodeFactory,
@@ -785,13 +785,50 @@ function createParameterGuards(
     if (descriptor?.resolution.schema === undefined) {
       continue;
     }
-    if (!typescript.isIdentifier(parameter.name) || isThisParameter(typescript, parameter)) {
+    if (isThisParameter(typescript, parameter)) {
       reportUnsupported(
         optionsForState(state),
         state,
         descriptor,
         original,
-        'Destructured and this parameters have no stable runtime binding for validation.',
+        '`this` parameters have no stable runtime binding for validation.',
+      );
+      continue;
+    }
+    if (!typescript.isIdentifier(parameter.name)) {
+      // The destructuring pattern itself cannot be guarded without changing binding
+      // evaluation order, so the whole argument value is guarded under a synthetic
+      // identifier first, and the original pattern destructures that already-validated
+      // value as the first statement of the body (mirroring `visitVariableDeclaration`'s
+      // destructuring-source guard).
+      const pattern = parameter.name;
+      const syntheticName = factory.createUniqueName('ttArg', typescript.GeneratedIdentifierFlags.Optimistic);
+      parameters[index] = factory.updateParameterDeclaration(
+        parameter,
+        parameter.modifiers,
+        parameter.dotDotDotToken,
+        syntheticName,
+        parameter.questionToken,
+        parameter.type,
+        parameter.initializer,
+      );
+      state.handledContracts.add(descriptor);
+      const protectCall = createProtectCall(
+        factory,
+        state,
+        descriptor.resolution.schema,
+        syntheticName,
+        descriptor,
+        'argument',
+      );
+      statements.push(
+        factory.createVariableStatement(
+          undefined,
+          factory.createVariableDeclarationList(
+            [factory.createVariableDeclaration(pattern, undefined, undefined, protectCall)],
+            typescript.NodeFlags.Const,
+          ),
+        ),
       );
       continue;
     }

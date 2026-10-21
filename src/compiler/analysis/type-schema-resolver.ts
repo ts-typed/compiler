@@ -41,6 +41,28 @@ function escapeRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+/**
+ * True when every declaration of a type's symbol lives inside some
+ * `node_modules` package other than `@ts-typed/*` itself. Such a type (e.g.
+ * NestJS's `ArgumentsHost`) is not authored by the user: they cannot add
+ * `@AllowExtraProperties()` to someone else's interface, and the real
+ * runtime object behind it is free to carry properties its public shape
+ * never declares (internal fields like `args`/`container`). Validating it as
+ * closed would reject every real instance, so it defaults to open instead.
+ * `@ts-typed/*` packages are excluded because their own types are governed
+ * by their dedicated rules (ValueObject, AggregateErrors, …) regardless of
+ * whether they are consumed as project source or as an installed dependency.
+ */
+function isThirdPartyDeclaration(declarations: readonly ts.Declaration[]): boolean {
+  if (declarations.length === 0) {
+    return false;
+  }
+  return declarations.every((declaration) => {
+    const normalized = declaration.getSourceFile().fileName.replace(/\\/g, '/');
+    return normalized.includes('/node_modules/') && !normalized.includes('/node_modules/@ts-typed/');
+  });
+}
+
 interface CompoundResolution {
   readonly schema?: Schema;
   readonly status: 'protected' | 'partial' | 'unsupported';
@@ -796,12 +818,16 @@ export class TypeSchemaResolver {
     }
 
     const hasIndex = indexResolution?.schema !== undefined;
+    const typeSymbol = type.aliasSymbol ?? type.getSymbol();
+    const isThirdParty =
+      typeSymbol !== undefined && isThirdPartyDeclaration(typeSymbol.getDeclarations() ?? []);
     return {
       status: 'partial',
       schema: {
         kind: 'object',
         properties: Object.fromEntries(propertyEntries),
         ...(hasIndex ? { index: indexResolution.schema } : {}),
+        ...(isThirdParty ? { allowExtraProperties: true } : {}),
       },
       reason: hasIndex
         ? `${ALIAS_LIMIT_REASON} The single runtime index contract does not distinguish string and symbol keys.`
