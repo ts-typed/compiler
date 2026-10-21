@@ -17,7 +17,7 @@ import {
 } from '../config';
 import { loadIntegration } from '../integration';
 import type { CliResult } from './cli-result.interface';
-import { runNestCommand, validateNestBuilder } from './nest-command';
+import { hasNestCliFile, runNestCommand, validateNestBuilder } from './nest-command';
 import { runApplication, runWatch } from './run-application';
 
 const CONFIG_FILE_NAME = 'typets.config.json';
@@ -168,7 +168,9 @@ async function runStart(args: readonly string[]): Promise<CliResult> {
 
   try {
     const kind = await detectProjectKind(parsed.projectRoot);
-    if (kind === 'nest') {
+    // A Nest-flagged project without nest-cli.json (e.g. a monorepo) falls back to the plain TypeScript path.
+    const usesNestBuilder = kind === 'nest' && (await hasNestCliFile(parsed.projectRoot));
+    if (usesNestBuilder) {
       const builderError = await validateNestBuilder(parsed.projectRoot);
       if (builderError !== undefined) {
         return { exitCode: EXIT_FAILURE, stdout: [], stderr: [builderError] };
@@ -176,7 +178,7 @@ async function runStart(args: readonly string[]): Promise<CliResult> {
     }
 
     // Nest always runs its unbundled entry point; other kinds keep the configured ncc setting.
-    const config = await loadConfig(parsed.configPath, kind === 'nest' ? { ncc: { enabled: false } } : {});
+    const config = await loadConfig(parsed.configPath, usesNestBuilder ? { ncc: { enabled: false } } : {});
     const report = await buildProject(config);
     if (!report.success) {
       return { exitCode: EXIT_FAILURE, stdout: [], stderr: [...report.errors] };
@@ -265,13 +267,15 @@ async function runBuild(args: readonly string[]): Promise<CliResult> {
   try {
     const projectRoot = dirname(parsed.configPath);
     const kind = await detectProjectKind(projectRoot);
-    if (kind === 'nest') {
+    // A Nest-flagged project without nest-cli.json (e.g. a monorepo) falls back to the plain TypeScript path.
+    const usesNestBuilder = kind === 'nest' && (await hasNestCliFile(projectRoot));
+    if (usesNestBuilder) {
       const builderError = await validateNestBuilder(projectRoot);
       if (builderError !== undefined) {
         return { exitCode: EXIT_FAILURE, stdout: [], stderr: [builderError] };
       }
     }
-    const overrides: ConfigOverrides = kind === 'nest'
+    const overrides: ConfigOverrides = usesNestBuilder
       ? { ...parsed.overrides, ncc: { ...parsed.overrides.ncc, enabled: false } }
       : parsed.overrides;
     const config = await loadConfig(parsed.configPath, overrides);

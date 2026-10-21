@@ -157,6 +157,15 @@ function invalidNestArguments(projectRoot: string, error: string): ParsedNestCom
   };
 }
 
+export async function hasNestCliFile(projectRoot: string): Promise<boolean> {
+  try {
+    await readFile(join(projectRoot, NEST_CLI_FILE_NAME), 'utf8');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function validateNestBuilder(projectRoot: string): Promise<string | undefined> {
   const configPath = join(projectRoot, NEST_CLI_FILE_NAME);
   let source: string;

@@ -425,6 +425,26 @@ test('start rejects an unsupported Nest builder the same way "nest start" does',
   assert.match(result.stderr.join('\n'), /not supported by ts-typed/);
 });
 
+test('start falls back to the plain TypeScript path when @nestjs/core is present but nest-cli.json is absent', async () => {
+  const { projectRoot } = writeConsumerProject();
+  writeFileSync(join(projectRoot, 'package.json'), JSON.stringify({ dependencies: { '@nestjs/core': '^12.0.0' } }));
+
+  const result = await runCli(['start', '--root', projectRoot]);
+
+  assert.equal(result.exitCode, 0, result.stderr.join('\n'));
+  assert.match(result.stdout.join('\n'), /Application exited successfully/);
+});
+
+test('build falls back to the plain TypeScript path when @nestjs/core is present but nest-cli.json is absent', async () => {
+  const { projectRoot, configPath } = writeConsumerProject();
+  writeFileSync(join(projectRoot, 'package.json'), JSON.stringify({ dependencies: { '@nestjs/core': '^12.0.0' } }));
+
+  const result = await runCli(['build', '--config', configPath]);
+
+  assert.equal(result.exitCode, 0, result.stderr.join('\n'));
+  assert.match(result.stdout.join('\n'), /Build succeeded/);
+});
+
 test('build bundles a plain TypeScript project by default', async () => {
   const { projectRoot, configPath } = writeConsumerProject();
   const config = JSON.parse(readFileSync(configPath, 'utf8'));
