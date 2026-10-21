@@ -1,11 +1,17 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 
 import { buildProject } from '../compiler/build';
 import type { CoverageReport } from '../compiler/report';
 import { createCoverageReport, formatCoverageReport } from '../compiler/report';
 import type { ConfigOverrides } from '../config';
-import { ConfigError, configureNestProjectScripts, initializeProject, loadConfig } from '../config';
+import {
+  ConfigError,
+  configureNestProjectScripts,
+  detectProjectKind,
+  initializeProject,
+  loadConfig,
+} from '../config';
 import { loadIntegration } from '../integration';
 import type { CliResult } from './cli-result.interface';
 import { runNestCommand } from './nest-command';
@@ -74,7 +80,8 @@ async function runInit(args: readonly string[], options: RunCliOptions): Promise
   }
 
   try {
-    const isNestProject = await hasNestProjectMarker(parsed.root);
+    const projectKind = await detectProjectKind(parsed.root);
+    const isNestProject = projectKind === 'nest';
     const nestAdapter = isNestProject ? tryLoadNestIntegration(parsed.root) : undefined;
     const result = await initializeProject(parsed.root, {
       ...(nestAdapter === undefined ? {} : { integration: '@ts-typed/nestjs' }),
@@ -111,32 +118,6 @@ async function runInit(args: readonly string[], options: RunCliOptions): Promise
     return { exitCode: EXIT_SUCCESS, stdout, stderr: [] };
   } catch (error: unknown) {
     return { exitCode: EXIT_FAILURE, stdout: [], stderr: [describeError(error)] };
-  }
-}
-
-interface PackageManifest {
-  readonly dependencies?: Record<string, unknown>;
-  readonly devDependencies?: Record<string, unknown>;
-}
-
-async function hasNestProjectMarker(root: string): Promise<boolean> {
-  try {
-    await readFile(join(root, 'nest-cli.json'), 'utf8');
-    return true;
-  } catch {
-    // A Nest project can omit nest-cli.json, particularly in a monorepo.
-  }
-
-  try {
-    const manifest: unknown = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
-    if (typeof manifest !== 'object' || manifest === null) {
-      return false;
-    }
-    const packageManifest = manifest as PackageManifest;
-    return '@nestjs/core' in (packageManifest.dependencies ?? {})
-      || '@nestjs/core' in (packageManifest.devDependencies ?? {});
-  } catch {
-    return false;
   }
 }
 

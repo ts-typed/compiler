@@ -7,6 +7,7 @@ const test = require('node:test');
 const {
   ConfigError,
   DEFAULT_CONFIG,
+  detectProjectKind,
   initializeProject,
   loadConfig,
 } = require('../../dist/config');
@@ -453,4 +454,55 @@ test('enforceMutationGuards defaults to false, accepts a true override, and reje
 
   const invalidFile = writeJson(directory, 'invalid.json', { compiler: { enforceMutationGuards: 'yes' } });
   await assert.rejects(() => loadConfig(invalidFile), /compiler\.enforceMutationGuards must be boolean/);
+});
+
+test('detectProjectKind finds Nest via nest-cli.json even with no package.json', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ts-typed-kind-nest-cli-'));
+  fs.writeFileSync(path.join(root, 'nest-cli.json'), JSON.stringify({ sourceRoot: 'src' }));
+
+  assert.equal(await detectProjectKind(root), 'nest');
+});
+
+test('detectProjectKind finds Nest via the @nestjs/core dependency', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ts-typed-kind-nest-dep-'));
+  fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ dependencies: { '@nestjs/core': '^12.0.0' } }));
+
+  assert.equal(await detectProjectKind(root), 'nest');
+});
+
+test('detectProjectKind finds Express via the express dependency', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ts-typed-kind-express-'));
+  fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ dependencies: { express: '^5.0.0' } }));
+
+  assert.equal(await detectProjectKind(root), 'express');
+});
+
+test('detectProjectKind does not mistake @nestjs/platform-express for Nest or Express on its own', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ts-typed-kind-platform-express-'));
+  fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ dependencies: { '@nestjs/platform-express': '^12.0.0' } }));
+
+  assert.equal(await detectProjectKind(root), 'typescript');
+});
+
+test('detectProjectKind prefers Nest over Express when both are present', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ts-typed-kind-both-'));
+  fs.writeFileSync(
+    path.join(root, 'package.json'),
+    JSON.stringify({ dependencies: { '@nestjs/core': '^12.0.0', express: '^5.0.0' } }),
+  );
+
+  assert.equal(await detectProjectKind(root), 'nest');
+});
+
+test('detectProjectKind falls back to typescript with no package.json, no nest-cli.json, and no matching dependency', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ts-typed-kind-plain-'));
+
+  assert.equal(await detectProjectKind(root), 'typescript');
+});
+
+test('detectProjectKind falls back to typescript when package.json is invalid JSON', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ts-typed-kind-invalid-'));
+  fs.writeFileSync(path.join(root, 'package.json'), '{ not json');
+
+  assert.equal(await detectProjectKind(root), 'typescript');
 });
