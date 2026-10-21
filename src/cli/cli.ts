@@ -39,6 +39,8 @@ const HELP_TEXT = [
   '  --no-bundle        Disable ncc bundling for this run (ncc.enabled=false)',
   '  --minify           Enable bundle minification for this run (ncc.minify=true)',
   '  --sourcemap        Enable source maps for this run (compiler and bundle)',
+  '  --watch, -w        (start) Rebuild and restart the application when sources change',
+  '  --debug            (start) Run the application with the Node inspector enabled',
 ].join('\n');
 
 export interface RunCliOptions {
@@ -150,8 +152,8 @@ async function runStart(args: readonly string[]): Promise<CliResult> {
       }
     }
 
-    // start runs the unbundled entry point, so bundling is always disabled here.
-    const config = await loadConfig(parsed.configPath, { ncc: { enabled: false } });
+    // Nest always runs its unbundled entry point; other kinds keep the configured ncc setting.
+    const config = await loadConfig(parsed.configPath, kind === 'nest' ? { ncc: { enabled: false } } : {});
     const report = await buildProject(config);
     if (!report.success) {
       return { exitCode: EXIT_FAILURE, stdout: [], stderr: [...report.errors] };

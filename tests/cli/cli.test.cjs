@@ -446,3 +446,48 @@ test('build detects a Nest project and produces an unbundled dist/main.js withou
   assert.equal(result.exitCode, 0, result.stderr.join('\n'));
   assert.equal(existsSync(join(projectRoot, 'dist', 'main.js')), true);
 });
+
+test('start with the default bundled config runs the bundled dist/index.js and keeps it in place', async () => {
+  const { projectRoot, configPath } = writeConsumerProject();
+  const config = JSON.parse(readFileSync(configPath, 'utf8'));
+  config.ncc.enabled = true;
+  writeFileSync(configPath, JSON.stringify(config));
+
+  const build = await runCli(['build', '--config', configPath]);
+  assert.equal(build.exitCode, 0, build.stderr.join('\n'));
+  assert.equal(existsSync(join(projectRoot, 'dist', 'index.js')), true);
+
+  const result = await runCli(['start', '--root', projectRoot]);
+
+  assert.equal(result.exitCode, 0, result.stderr.join('\n'));
+  assert.match(result.stdout.join('\n'), /Application exited successfully/);
+  assert.equal(existsSync(join(projectRoot, 'dist', 'index.js')), true);
+  assert.equal(existsSync(join(projectRoot, 'dist', 'main.js')), false);
+  assert.equal(execFileSync(process.execPath, [join(projectRoot, 'dist', 'index.js')]).toString(), '1');
+});
+
+test('start --watch is accepted, starts the watch loop, and stops cleanly on SIGINT', async () => {
+  const { projectRoot } = writeConsumerProject();
+
+  const running = runCli(['start', '--root', projectRoot, '--watch']);
+  const deadline = Date.now() + 20000;
+  while (!existsSync(join(projectRoot, 'dist', 'main.js')) && Date.now() < deadline) {
+    await new Promise((resolveWait) => setTimeout(resolveWait, 50));
+  }
+  await new Promise((resolveWait) => setTimeout(resolveWait, 300));
+  process.emit('SIGINT');
+  const result = await running;
+
+  assert.equal(result.exitCode, 0, result.stderr.join('\n'));
+  assert.match(result.stdout.join('\n'), /ts-typed watch stopped/);
+});
+
+test('start accepts -w and --debug without the unknown-option error', async () => {
+  const { projectRoot } = writeConsumerProject();
+  const missingConfig = join(projectRoot, 'missing.config.json');
+
+  const result = await runCli(['start', '--root', projectRoot, '--debug', '-w', '--config', missingConfig]);
+
+  assert.equal(result.exitCode, 1);
+  assert.doesNotMatch(result.stderr.join('\n'), /Unknown start option/);
+});

@@ -9,7 +9,9 @@ import type { ProjectConfig } from '../config';
 import type { CliResult } from './cli-result.interface';
 
 export function startApplication(config: ProjectConfig, projectRoot: string, debug: boolean): ChildProcess {
-  const entryFile = join(resolve(config.outDir), `${entryFileName(config.entry)}.js`);
+  // A bundled build always writes index.js; an unbundled build keeps the entry's own name.
+  const outputName = config.ncc.enabled ? 'index' : entryFileName(config.entry);
+  const entryFile = join(resolve(config.outDir), `${outputName}.js`);
   return spawn(process.execPath, [...(debug ? ['--inspect'] : []), entryFile], {
     cwd: projectRoot,
     stdio: 'inherit',
