@@ -8,8 +8,9 @@ npx ts-typed init
 npx ts-typed build
 ```
 
-- `ts-typed init` creates `typets.config.json` in the current project.
-- `ts-typed build` runs the transform and emits the instrumented project to `outDir`.
+- `ts-typed init` creates `typets.config.json` in the current project. It detects Nest and Express projects the same way: it installs the matching `@ts-typed/*` integration package (`@ts-typed/nestjs` or `@ts-typed/express`) and writes `build`/`start`/`dev`/`start:prod` scripts for plain TypeScript and Express projects. Existing scripts are never overwritten. For Nest and Express it asks before wiring up global error handling, and it always asks before installing `@ts-typed/validators`.
+- `ts-typed build` runs the transform and emits the instrumented project to `outDir`. It auto-detects a Nest project and uses the Nest build path, so `ts-typed nest build` remains only as an explicit alias.
+- `ts-typed start [--watch] [--debug]` runs the instrumented project. It auto-detects a Nest project as well, so `ts-typed nest start` remains only as an explicit alias.
 
 Full behavior spec: [`docs/SPEC.md`](https://github.com/ts-typed/ts-typed/blob/main/docs/SPEC.md) in the [ts-typed/ts-typed](https://github.com/ts-typed/ts-typed) repository. Architecture notes: [`docs/architecture.md`](https://github.com/ts-typed/ts-typed/blob/main/docs/architecture.md).
 
@@ -109,21 +110,21 @@ npm install --save-dev @ts-typed/compiler @ts-typed/nestjs
 npx ts-typed init
 ```
 
-`init` detects the normal Nest scripts and changes only their compiler command. The familiar commands continue to be the public workflow:
+`init` detects the normal Nest scripts and changes only their compiler command. The familiar commands continue to be the public workflow, and `ts-typed build` and `ts-typed start` auto-detect the Nest project:
 
 ```json
 {
   "scripts": {
-    "build": "ts-typed nest build",
-    "start": "ts-typed nest start",
-    "start:dev": "ts-typed nest start --watch",
-    "start:debug": "ts-typed nest start --debug --watch",
+    "build": "ts-typed build",
+    "start": "ts-typed start",
+    "start:dev": "ts-typed start --watch",
+    "start:debug": "ts-typed start --debug --watch",
     "start:prod": "node dist/main"
   }
 }
 ```
 
-The Nest command builds the project through the TS Typed transformer without NCC bundling, so Nest's normal `dist/main.js` production entry remains intact. In watch mode it rebuilds the protected output and only restarts the application after a successful build. Initialization is idempotent and leaves unrelated or custom scripts unchanged.
+`ts-typed nest build` and `ts-typed nest start` still work as explicit aliases. The Nest build path builds the project through the TS Typed transformer without NCC bundling, so Nest's normal `dist/main.js` production entry remains intact. In watch mode it rebuilds the protected output and only restarts the application after a successful build. Initialization is idempotent and leaves unrelated or custom scripts unchanged.
 
 This path requires Nest's TypeScript (`tsc`) builder. SWC, Rspack, and webpack do not run TypeScript custom transformers, so TS Typed rejects them rather than emitting code that appears built but is not runtime-protected. Set `"compilerOptions": { "builder": "tsc" }` in `nest-cli.json` when necessary.
 
