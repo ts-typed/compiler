@@ -66,6 +66,25 @@ test('protectOptimizedImmutableValue supports cyclic plain-object graphs', () =>
   assert.equal(Object.isFrozen(node), true);
 });
 
+test('protectOptimizedImmutableValue leaves an already-walked sibling mutable when a LATER sibling is rejected', () => {
+  const outerSchema = {
+    kind: 'object',
+    properties: {
+      sib: { schema: { kind: 'object', properties: { x: { schema: { kind: 'primitive', name: 'number' } } } } },
+      a: { schema: { kind: 'object', properties: { m: { schema: { kind: 'map', key: { kind: 'primitive', name: 'string' }, value: { kind: 'primitive', name: 'string' } } } } } },
+    },
+  };
+  const outer = { sib: { x: 1 }, a: { m: new Map() } };
+
+  assert.throws(
+    () => runtime.protectOptimizedImmutableValue(outerSchema, outer, context),
+    /TTOptImmut only supports plain objects and arrays/,
+  );
+  assert.equal(Object.isFrozen(outer), false);
+  assert.equal(Object.isFrozen(outer.sib), false);
+  assert.equal(Object.isFrozen(outer.a), false);
+});
+
 test('protectOptimizedImmutableValue rejects class instances instead of pretending they are DTOs', () => {
   class UserEntity {
     constructor() {

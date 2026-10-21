@@ -16,11 +16,17 @@ export function protectOptimizedImmutableValue(
   context: AssertionContext,
 ): unknown {
   assertValue(schema, value, context);
+  // Verified, then frozen, as two separate passes: freezing while still
+  // walking the graph for the unsupported-shape check would freeze a
+  // sibling visited before the node that gets rejected, leaving the input
+  // partially (and unpredictably, depending on key order) frozen on a call
+  // that throws and returns nothing to the caller.
+  assertPlainGraphSupported(value, new WeakSet<object>());
   freezePlainGraph(value, new WeakSet<object>());
   return value;
 }
 
-function freezePlainGraph(value: unknown, visited: WeakSet<object>): void {
+function assertPlainGraphSupported(value: unknown, visited: WeakSet<object>): void {
   if (value === null || typeof value !== 'object') {
     return;
   }
@@ -45,7 +51,21 @@ function freezePlainGraph(value: unknown, visited: WeakSet<object>): void {
         'TTOptImmut only supports plain data properties; accessor properties require the normal typed contract.',
       );
     }
-    freezePlainGraph(descriptor.value, visited);
+    assertPlainGraphSupported(descriptor.value, visited);
+  }
+}
+
+function freezePlainGraph(value: unknown, visited: WeakSet<object>): void {
+  if (value === null || typeof value !== 'object' || visited.has(value)) {
+    return;
+  }
+  visited.add(value);
+
+  for (const key of Reflect.ownKeys(value)) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (descriptor !== undefined && 'value' in descriptor) {
+      freezePlainGraph(descriptor.value, visited);
+    }
   }
   Object.freeze(value);
 }

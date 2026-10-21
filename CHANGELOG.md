@@ -4,6 +4,26 @@ All notable changes to `@ts-typed/compiler` are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.1.35] - 2026-10-21
+
+### Fixed
+
+- **`TTOptImmut` could partially freeze a rejected value.** `protectOptimizedImmutableValue` froze each node as it walked the graph, so a sibling visited before an unsupported node (a class instance, a `Map`/`Set`, an accessor property) was already frozen by the time the call threw — the caller's input came back silently, unpredictably mutated instead of untouched. The unsupported-shape check now runs as its own complete pass before any freezing starts, so a rejected call never freezes anything.
+
+### Known limitations (found during this round's review, not fixed — a
+legitimate JS engine constraint, not a quick patch)
+
+- **A legitimately very deep value (roughly 500+ nested levels) throws a raw
+  `RangeError: Maximum call stack size exceeded`** from `assertValue`,
+  `protectValue` and `protectOptimizedImmutableValue`, instead of a
+  `StrictTypeError` or a successful result. Validation and protection are
+  recursive, at roughly 5-10 stack frames per nested level; a self-referential
+  (cyclic) structure terminates correctly via the existing visited-set
+  tracking regardless of depth, so this only affects genuinely deep
+  non-cyclic data. Fixing it would mean rewriting the traversal iteratively
+  with an explicit stack, a substantial change to the hottest code path in
+  the runtime, not attempted this round.
+
 ## [0.1.34] - 2026-10-21
 
 ### Fixed
