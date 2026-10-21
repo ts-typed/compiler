@@ -29,12 +29,15 @@ interface GuardContract {
 
 interface DataPropertyGuardState {
   readonly contracts: GuardContract[];
-  readonly getValue: () => unknown;
-  readonly setValue: (value: unknown) => void;
   value: unknown;
   isInitialized: boolean;
   isReadonlyField: boolean;
   isLocked: boolean;
+}
+
+interface SharedDataAccessors {
+  readonly get: (this: object) => unknown;
+  readonly set: (this: object, value: unknown) => void;
 }
 
 interface ProtectionState {
@@ -57,6 +60,42 @@ const installedDataGuards = new WeakMap<
   object,
   Map<PropertyKey, DataPropertyGuardState>
 >();
+const sharedDataAccessors = new Map<PropertyKey, SharedDataAccessors>();
+const mutationProxyTargets = new WeakMap<object, object>();
+
+function guardOwnerOf(value: object, key: PropertyKey): object | undefined {
+  let candidate: object | null = mutationProxyTargets.get(value) ?? value;
+  while (candidate !== null) {
+    if (installedDataGuards.get(candidate)?.has(key) === true) {
+      return candidate;
+    }
+    candidate = Object.getPrototypeOf(candidate) as object | null;
+  }
+  return undefined;
+}
+
+function getSharedDataAccessors(key: PropertyKey): SharedDataAccessors {
+  const existing = sharedDataAccessors.get(key);
+  if (existing !== undefined) {
+    return existing;
+  }
+
+  const accessors: SharedDataAccessors = {
+    get(this: object): unknown {
+      const owner = guardOwnerOf(this, key);
+      return owner === undefined ? undefined : installedDataGuards.get(owner)?.get(key)?.value;
+    },
+    set(this: object, nextValue: unknown): void {
+      const owner = guardOwnerOf(this, key);
+      const guard = owner === undefined ? undefined : installedDataGuards.get(owner)?.get(key);
+      if (guard !== undefined && owner !== undefined) {
+        setGuardedValue(guard, nextValue, owner);
+      }
+    },
+  };
+  sharedDataAccessors.set(key, accessors);
+  return accessors;
+}
 
 /**
  * Mutation-guard proxies already created for an underlying array, so the same
@@ -832,6 +871,7 @@ function rememberCollectionMutationProxy(
   entries.push({ schema, context, proxy });
   collectionMutationEntries.set(collection, entries);
   mutationGuardProxies.add(proxy);
+  mutationProxyTargets.set(proxy, collection);
 }
 
 /**
@@ -1571,11 +1611,8 @@ function installDataGuard(
     isInitialized,
     isReadonlyField: readonlyField,
     isLocked: false,
-    getValue: (): unknown => guardState.value,
-    setValue: (nextValue: unknown): void => {
-      setGuardedValue(guardState, nextValue, owner);
-    },
   };
+  const accessors = getSharedDataAccessors(key);
 
   try {
     // Always installed as configurable: a subclass that redeclares this
@@ -1587,8 +1624,8 @@ function installDataGuard(
     // has reached the most-derived class and no further redeclaration can
     // happen — see that function's own doc comment.
     Object.defineProperty(owner, key, {
-      get: guardState.getValue,
-      set: guardState.setValue,
+      get: accessors.get,
+      set: accessors.set,
       enumerable: descriptor?.enumerable ?? true,
       configurable: true,
     });
@@ -1742,9 +1779,10 @@ function getInstalledGuard(
   }
 
   const descriptor = Object.getOwnPropertyDescriptor(owner, key);
+  const accessors = getSharedDataAccessors(key);
   if (
-    descriptor?.get !== guard.getValue ||
-    descriptor.set !== guard.setValue
+    descriptor?.get !== accessors.get ||
+    descriptor.set !== accessors.set
   ) {
     installedDataGuards.get(owner)?.delete(key);
     return undefined;

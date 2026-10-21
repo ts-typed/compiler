@@ -88,6 +88,30 @@ test('object guards preserve configurable enumerable data-property descriptors',
   assert.equal(typeof descriptor.set, 'function');
 });
 
+test('reuses accessor functions across objects with the same guarded field', () => {
+  const schema = {
+    kind: 'object',
+    properties: { count: { schema: numberSchema } },
+  };
+  const first = { count: 1 };
+  const second = { count: 2 };
+
+  guards.protectValue(schema, first, context);
+  guards.protectValue(schema, second, context);
+
+  const firstDescriptor = Object.getOwnPropertyDescriptor(first, 'count');
+  const secondDescriptor = Object.getOwnPropertyDescriptor(second, 'count');
+
+  assert.strictEqual(firstDescriptor.get, secondDescriptor.get);
+  assert.strictEqual(firstDescriptor.set, secondDescriptor.set);
+  first.count = 3;
+  assert.equal(first.count, 3);
+  assert.throws(() => {
+    second.count = 'invalid';
+  }, runtime.StrictTypeError);
+  assert.equal(second.count, 2);
+});
+
 test('installFieldGuard rejects an invalid initializer before installing a guard', () => {
   const instance = { count: 'one' };
 
