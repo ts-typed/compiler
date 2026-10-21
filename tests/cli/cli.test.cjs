@@ -383,3 +383,66 @@ test('build reports a failure when diagnostics.reportFile cannot be written', as
   assert.equal(result.stdout.length, 0);
   assert.match(result.stderr.join('\n'), /Could not write diagnostics report to .*blocker/);
 });
+
+test('start builds a plain TypeScript project once and runs it to completion', async () => {
+  const { projectRoot } = writeConsumerProject();
+
+  const result = await runCli(['start', '--root', projectRoot]);
+
+  assert.equal(result.exitCode, 0, result.stderr.join('\n'));
+  assert.match(result.stdout.join('\n'), /Application exited successfully/);
+});
+
+test('start detects a Nest project and runs the unbundled Nest entry point', async () => {
+  const { projectRoot } = writeConsumerProject();
+  writeFileSync(
+    join(projectRoot, 'nest-cli.json'),
+    JSON.stringify({ sourceRoot: 'src', compilerOptions: { builder: 'tsc', tsConfigPath: 'tsconfig.json' } }),
+  );
+  writeFileSync(join(projectRoot, 'package.json'), JSON.stringify({ dependencies: { '@nestjs/core': '^12.0.0' } }));
+
+  const result = await runCli(['start', '--root', projectRoot]);
+
+  assert.equal(result.exitCode, 0, result.stderr.join('\n'));
+  assert.equal(existsSync(join(projectRoot, 'dist', 'main.js')), true);
+});
+
+test('start rejects an unsupported Nest builder the same way "nest start" does', async () => {
+  const { projectRoot } = writeConsumerProject();
+  writeFileSync(
+    join(projectRoot, 'nest-cli.json'),
+    JSON.stringify({ sourceRoot: 'src', compilerOptions: { builder: 'swc' } }),
+  );
+  writeFileSync(join(projectRoot, 'package.json'), JSON.stringify({ dependencies: { '@nestjs/core': '^12.0.0' } }));
+
+  const result = await runCli(['start', '--root', projectRoot]);
+
+  assert.equal(result.exitCode, 1);
+  assert.match(result.stderr.join('\n'), /not supported by ts-typed/);
+});
+
+test('build bundles a plain TypeScript project by default', async () => {
+  const { projectRoot, configPath } = writeConsumerProject();
+  const config = JSON.parse(readFileSync(configPath, 'utf8'));
+  config.ncc.enabled = true;
+  writeFileSync(configPath, JSON.stringify(config));
+
+  const result = await runCli(['build', '--config', configPath]);
+
+  assert.equal(result.exitCode, 0, result.stderr.join('\n'));
+  assert.equal(existsSync(join(projectRoot, 'dist', 'index.js')), true);
+});
+
+test('build detects a Nest project and produces an unbundled dist/main.js without the "nest" subcommand', async () => {
+  const { projectRoot, configPath } = writeConsumerProject();
+  writeFileSync(
+    join(projectRoot, 'nest-cli.json'),
+    JSON.stringify({ sourceRoot: 'src', compilerOptions: { builder: 'tsc', tsConfigPath: 'tsconfig.json' } }),
+  );
+  writeFileSync(join(projectRoot, 'package.json'), JSON.stringify({ dependencies: { '@nestjs/core': '^12.0.0' } }));
+
+  const result = await runCli(['build', '--config', configPath]);
+
+  assert.equal(result.exitCode, 0, result.stderr.join('\n'));
+  assert.equal(existsSync(join(projectRoot, 'dist', 'main.js')), true);
+});

@@ -14,7 +14,8 @@ import {
 } from '../config';
 import { loadIntegration } from '../integration';
 import type { CliResult } from './cli-result.interface';
-import { runNestCommand } from './nest-command';
+import { runNestCommand, validateNestBuilder } from './nest-command';
+import { runApplication, runWatch } from './run-application';
 
 const CONFIG_FILE_NAME = 'typets.config.json';
 
@@ -28,6 +29,7 @@ const HELP_TEXT = [
   'Usage:',
   '  ts-typed init [--root <path>]',
   '  ts-typed build [--config <path>] [--no-bundle] [--minify] [--sourcemap]',
+  '  ts-typed start [--root <path>] [--config <path>] [--watch] [--debug]',
   '  ts-typed nest build [--root <path>] [--config <path>]',
   '  ts-typed help',
   '',
@@ -60,6 +62,10 @@ export async function runCli(
 
   if (command === 'build') {
     return await runBuild(rest);
+  }
+
+  if (command === 'start') {
+    return await runStart(rest);
   }
 
   if (command === 'nest') {
@@ -129,6 +135,102 @@ function tryLoadNestIntegration(root: string) {
   }
 }
 
+async function runStart(args: readonly string[]): Promise<CliResult> {
+  const parsed = parseStartArgs(args);
+  if (parsed.error !== undefined) {
+    return { exitCode: EXIT_USAGE, stdout: [], stderr: [parsed.error] };
+  }
+
+  try {
+    const kind = await detectProjectKind(parsed.projectRoot);
+    if (kind === 'nest') {
+      const builderError = await validateNestBuilder(parsed.projectRoot);
+      if (builderError !== undefined) {
+        return { exitCode: EXIT_FAILURE, stdout: [], stderr: [builderError] };
+      }
+    }
+
+    // start runs the unbundled entry point, so bundling is always disabled here.
+    const config = await loadConfig(parsed.configPath, { ncc: { enabled: false } });
+    const report = await buildProject(config);
+    if (!report.success) {
+      return { exitCode: EXIT_FAILURE, stdout: [], stderr: [...report.errors] };
+    }
+    const buildResult: CliResult = {
+      exitCode: EXIT_SUCCESS,
+      stdout: [`Build succeeded: ${report.outDir}`],
+      stderr: [],
+    };
+
+    if (parsed.watch) {
+      return await runWatch(config, parsed.projectRoot, parsed.debug, buildResult, 'ts-typed');
+    }
+
+    const exitCode = await runApplication(config, parsed.projectRoot, parsed.debug);
+    return {
+      exitCode,
+      stdout: [...buildResult.stdout, exitCode === 0
+        ? 'Application exited successfully.'
+        : `Application exited with code ${exitCode}.`],
+      stderr: [],
+    };
+  } catch (error: unknown) {
+    return { exitCode: EXIT_FAILURE, stdout: [], stderr: [describeError(error)] };
+  }
+}
+
+interface ParsedStartArgs {
+  readonly projectRoot: string;
+  readonly configPath: string;
+  readonly debug: boolean;
+  readonly watch: boolean;
+  readonly error?: string;
+}
+
+function parseStartArgs(args: readonly string[]): ParsedStartArgs {
+  let projectRoot = process.cwd();
+  let configPath: string | undefined;
+  let debug = false;
+  let watch = false;
+
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === '--root') {
+      const value = args[index + 1];
+      if (value === undefined) {
+        return invalidStartArguments(projectRoot, '--root requires a path argument.');
+      }
+      projectRoot = resolve(value);
+      index += 1;
+      continue;
+    }
+    if (arg === '--config') {
+      const value = args[index + 1];
+      if (value === undefined) {
+        return invalidStartArguments(projectRoot, '--config requires a path argument.');
+      }
+      configPath = resolve(value);
+      index += 1;
+      continue;
+    }
+    if (arg === '--watch' || arg === '-w') {
+      watch = true;
+      continue;
+    }
+    if (arg === '--debug') {
+      debug = true;
+      continue;
+    }
+    return invalidStartArguments(projectRoot, `Unknown start option "${arg}".`);
+  }
+
+  return { projectRoot, configPath: configPath ?? join(projectRoot, CONFIG_FILE_NAME), debug, watch };
+}
+
+function invalidStartArguments(projectRoot: string, error: string): ParsedStartArgs {
+  return { projectRoot, configPath: join(projectRoot, CONFIG_FILE_NAME), debug: false, watch: false, error };
+}
+
 async function runBuild(args: readonly string[]): Promise<CliResult> {
   const parsed = parseBuildArgs(args);
   if (parsed.error !== undefined) {
@@ -136,7 +238,18 @@ async function runBuild(args: readonly string[]): Promise<CliResult> {
   }
 
   try {
-    const config = await loadConfig(parsed.configPath, parsed.overrides);
+    const projectRoot = dirname(parsed.configPath);
+    const kind = await detectProjectKind(projectRoot);
+    if (kind === 'nest') {
+      const builderError = await validateNestBuilder(projectRoot);
+      if (builderError !== undefined) {
+        return { exitCode: EXIT_FAILURE, stdout: [], stderr: [builderError] };
+      }
+    }
+    const overrides: ConfigOverrides = kind === 'nest'
+      ? { ...parsed.overrides, ncc: { ...parsed.overrides.ncc, enabled: false } }
+      : parsed.overrides;
+    const config = await loadConfig(parsed.configPath, overrides);
     const report = await buildProject(config);
 
     if (!report.success) {
