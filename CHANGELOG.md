@@ -4,6 +4,18 @@ All notable changes to `@ts-typed/compiler` are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.1.33] - 2026-10-20
+
+### Performance
+
+- **Schema-specialized protection installer.** Repeated object protections now
+  reuse a compiled per-schema/per-prototype installer with precomputed property
+  schemas, paths and decorator metadata. The generic installer remains active
+  for index signatures and other special cases.
+- In the 10,000-object benchmark, response protection improved from 39.24 ms to
+  36.21 ms in the full pipeline run (about 7.7%); the isolated runtime sample
+  improved to 34.44 ms (about 12.2%).
+
 ## [0.1.32] - 2026-10-20
 
 ### Performance

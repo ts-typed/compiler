@@ -2,7 +2,10 @@ import { isAggregateErrorsEnabled } from '../aggregate-errors.decorator';
 import { AggregateStrictTypeError } from '../aggregate-strict-type-error.class';
 import { isExtraPropertiesAllowed } from '../allow-extra-properties.decorator';
 import { isServerPopulated } from '../server-populated.decorator';
-import { getTypeErrorResponse } from '../type-error-response.decorator';
+import {
+  getTypeErrorResponse,
+  type TypeErrorResponseOptions,
+} from '../type-error-response.decorator';
 import {
   assertValue,
   assertValueCollecting,
@@ -22,7 +25,10 @@ import type {
 } from '../schema.interface';
 import type { Schema } from '../schema.type';
 import { StrictTypeError } from '../strict-type-error.class';
-import { SchemaMetadataCache } from '../schema-metadata-cache.class';
+import {
+  SchemaMetadataCache,
+  type ObjectProtectionInstaller,
+} from '../schema-metadata-cache.class';
 import { createTraversalSession } from '../traversal-session';
 import type { ProtectionPlanEntry } from '../traversal-session';
 import type { ValueObjectErrorContext } from '../value-object.class';
@@ -1404,53 +1410,22 @@ function installObjectProtection(
   state: ProtectionState,
   protectNested = true,
 ): void {
-  const metadata = state.metadataCache.getObjectMetadata(schema);
-  const declaredKeys = metadata.declaredKeySet;
   const ownerContext: AssertionContext = isServerPopulated(value)
     ? { ...context, isServerPopulated: true }
     : context;
 
-  for (const key of metadata.declaredKeys) {
-    const property = schema.properties[key];
-    const propertyContext = withTypeErrorResponse(
-      nestedContext(ownerContext, key),
-      value,
-      key,
-    );
-    const installedGuard = getInstalledGuard(value, key);
-    if (installedGuard !== undefined) {
-      addContractAndProtect(
-        installedGuard,
-        property.schema,
-        property.readonly === true,
-        propertyContext,
-        value,
-        key,
-        state,
-        protectNested,
-      );
-      continue;
-    }
-    const descriptor = Object.getOwnPropertyDescriptor(value, key);
-    if (descriptor === undefined || isAccessorDescriptor(descriptor)) {
-      continue;
-    }
+  const installer = state.metadataCache.getObjectProtectionInstaller(
+    schema,
+    value,
+  );
 
-    installKnownDataProperty(
-      value,
-      key,
-      descriptor,
-      property.schema,
-      property.readonly === true,
-      propertyContext,
-      state,
-      protectNested,
-    );
-  }
+  installCompiledObjectProperties(value, ownerContext, state, installer, protectNested);
 
   if (schema.index === undefined) {
     return;
   }
+
+  const declaredKeys = state.metadataCache.getObjectMetadata(schema).declaredKeySet;
 
   for (const key of Reflect.ownKeys(value)) {
     if (declaredKeys.has(key)) {
@@ -1488,6 +1463,51 @@ function installObjectProtection(
   }
 }
 
+function installCompiledObjectProperties(
+  value: object,
+  ownerContext: AssertionContext,
+  state: ProtectionState,
+  installer: ObjectProtectionInstaller,
+  protectNested: boolean,
+): void {
+  for (const property of installer.properties) {
+    const propertyContext = withCachedTypeErrorResponse(
+      { ...ownerContext, propertyPath: `${ownerContext.propertyPath}${property.pathSuffix}` },
+      property.typeErrorResponse,
+    );
+    const installedGuard = getInstalledGuard(value, property.key);
+    if (installedGuard !== undefined) {
+      addContractAndProtect(
+        installedGuard,
+        property.schema,
+        property.readonlyField,
+        propertyContext,
+        value,
+        property.key,
+        state,
+        protectNested,
+        property.allowDirectExtraProperties,
+      );
+      continue;
+    }
+    const descriptor = Object.getOwnPropertyDescriptor(value, property.key);
+    if (descriptor === undefined || isAccessorDescriptor(descriptor)) {
+      continue;
+    }
+    installKnownDataProperty(
+      value,
+      property.key,
+      descriptor,
+      property.schema,
+      property.readonlyField,
+      propertyContext,
+      state,
+      protectNested,
+      property.allowDirectExtraProperties,
+    );
+  }
+}
+
 function addContractAndProtect(
   installedGuard: DataPropertyGuardState,
   schema: Schema,
@@ -1497,11 +1517,12 @@ function addContractAndProtect(
   key: PropertyKey,
   state: ProtectionState,
   protectNested = true,
+  allowDirectExtraPropertiesOverride?: boolean,
 ): void {
   const contract: GuardContract = {
     schema,
     context,
-    allowDirectExtraProperties: isExtraPropertiesAllowed(
+    allowDirectExtraProperties: allowDirectExtraPropertiesOverride ?? isExtraPropertiesAllowed(
       owner,
       decoratorPropertyKey(key),
     ),
@@ -1525,11 +1546,12 @@ function installKnownDataProperty(
   context: AssertionContext,
   state: ProtectionState,
   protectNested = true,
+  allowDirectExtraPropertiesOverride?: boolean,
 ): void {
   const contract: GuardContract = {
     schema,
     context,
-    allowDirectExtraProperties: isExtraPropertiesAllowed(
+    allowDirectExtraProperties: allowDirectExtraPropertiesOverride ?? isExtraPropertiesAllowed(
       owner,
       decoratorPropertyKey(key),
     ),
@@ -1924,6 +1946,21 @@ function withTypeErrorResponse(
   // property so a decorated parent does not customize its nested children.
   const { typeErrorResponseMessage: _inheritedMessage, typeErrorResponseStatus: _inheritedStatus, ...inherited } = context;
   const response = getTypeErrorResponse(owner, decoratorPropertyKey(key));
+  if (response === undefined) {
+    return inherited;
+  }
+  return {
+    ...inherited,
+    typeErrorResponseMessage: response.message,
+    ...(response.status === undefined ? {} : { typeErrorResponseStatus: response.status }),
+  };
+}
+
+function withCachedTypeErrorResponse(
+  context: AssertionContext,
+  response: TypeErrorResponseOptions | undefined,
+): AssertionContext {
+  const { typeErrorResponseMessage: _inheritedMessage, typeErrorResponseStatus: _inheritedStatus, ...inherited } = context;
   if (response === undefined) {
     return inherited;
   }
