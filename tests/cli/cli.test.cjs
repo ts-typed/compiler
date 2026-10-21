@@ -141,9 +141,12 @@ test('init asks to install the Nest global filter and delegates the opted-in set
   let asked = '';
   const result = await runCli(['init', '--root', root], {
     confirm: async (question) => {
-      asked = question;
+      if (asked === '') {
+        asked = question;
+      }
       return true;
     },
+    installDependency: async (projectRoot, packageName) => ({ installed: true, message: `Installed ${packageName}.` }),
   });
 
   assert.equal(result.exitCode, 0, result.stderr.join('\n'));
@@ -176,7 +179,8 @@ test('init configures conventional Nest scripts to invoke the ts-typed Nest comm
     "module.exports = { apiVersion: 1, name: 'nestjs', resolveProject: (context) => ({ apiVersion: 1, integration: 'nestjs', projectRoot: context.projectRoot }) };\n",
   );
 
-  const first = await runCli(['init', '--root', root]);
+  const installDependency = async (projectRoot, packageName) => ({ installed: true, message: `Installed ${packageName}.` });
+  const first = await runCli(['init', '--root', root], { installDependency });
   assert.equal(first.exitCode, 0, first.stderr.join('\n'));
   assert.match(first.stdout.join('\n'), /Configured Nest npm scripts/);
   assert.doesNotMatch(first.stdout.join('\n'), /build: ts-typed build/);
@@ -190,7 +194,7 @@ test('init configures conventional Nest scripts to invoke the ts-typed Nest comm
     lint: 'eslint "{src,apps,libs,test}/**/*.ts"',
   });
 
-  const second = await runCli(['init', '--root', root]);
+  const second = await runCli(['init', '--root', root], { installDependency });
   assert.equal(second.exitCode, 0, second.stderr.join('\n'));
   assert.deepEqual(JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')), firstManifest);
 });
@@ -490,4 +494,92 @@ test('start accepts -w and --debug without the unknown-option error', async () =
 
   assert.equal(result.exitCode, 1);
   assert.doesNotMatch(result.stderr.join('\n'), /Unknown start option/);
+});
+
+test('init on a plain TypeScript project writes build/start/dev/start:prod scripts and offers to install validators', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'ts-typed-cli-plain-init-'));
+  writeFileSync(join(root, 'package.json'), JSON.stringify({ name: 'demo' }));
+  const questions = [];
+
+  const result = await runCli(['init', '--root', root], {
+    confirm: async (question) => {
+      questions.push(question);
+      return false;
+    },
+  });
+
+  assert.equal(result.exitCode, 0, result.stderr.join('\n'));
+  assert.deepEqual(JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).scripts, {
+    build: 'ts-typed build',
+    start: 'ts-typed start',
+    dev: 'ts-typed start --watch',
+    'start:prod': 'node dist/index.js',
+  });
+  assert.equal(questions.length, 1);
+  assert.match(questions[0], /@ts-typed\/validators/);
+});
+
+test('init on an Express project installs @ts-typed/express, writes its scripts, and offers both prompts', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'ts-typed-cli-express-init-'));
+  writeFileSync(join(root, 'package.json'), JSON.stringify({ dependencies: { express: '^5.0.0' } }));
+  const adapterDirectory = join(root, 'node_modules', '@ts-typed', 'express');
+  const installed = [];
+  const questions = [];
+
+  const result = await runCli(['init', '--root', root], {
+    installDependency: async (projectRoot, packageName) => {
+      installed.push(packageName);
+      mkdirSync(adapterDirectory, { recursive: true });
+      writeFileSync(
+        join(adapterDirectory, 'index.js'),
+        [
+          'module.exports = {',
+          '  apiVersion: 1,',
+          "  name: 'express',",
+          '  resolveProject: (context) => ({ apiVersion: 1, integration: "express", projectRoot: context.projectRoot }),',
+          '  installGlobalStrictTypeErrorFilter: (context) => ({ changed: true, message: "Registered the global error handler." }),',
+          '};',
+        ].join('\n'),
+      );
+      return { installed: true, message: `Installed ${packageName}.` };
+    },
+    confirm: async (question) => {
+      questions.push(question);
+      return question.includes('error handler');
+    },
+  });
+
+  assert.equal(result.exitCode, 0, result.stderr.join('\n'));
+  assert.equal(questions.length, 2);
+  assert.match(questions[0], /error handler/);
+  assert.match(questions[1], /@ts-typed\/validators/);
+  assert.match(result.stdout.join('\n'), /Registered the global error handler/);
+  assert.deepEqual(JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).scripts, {
+    build: 'ts-typed build',
+    start: 'ts-typed start',
+    dev: 'ts-typed start --watch',
+    'start:prod': 'node dist/index.js',
+  });
+});
+
+test('init installs @ts-typed/nestjs automatically when a Nest project does not have it yet', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'ts-typed-cli-nest-autoinstall-'));
+  writeFileSync(join(root, 'nest-cli.json'), JSON.stringify({ sourceRoot: 'src' }));
+  writeFileSync(join(root, 'package.json'), JSON.stringify({ dependencies: { '@nestjs/core': '^12.0.0' } }));
+  const installCalls = [];
+
+  // `installDependency` is passed as a test-only option (added to
+  // RunCliOptions in Step 3 below) so this test never spawns a real
+  // package manager; `installDependency`'s OWN default-runner behavior is
+  // already covered by Task 3's unit tests.
+  const result = await runCli(['init', '--root', root], {
+    installDependency: async (projectRoot, packageName) => {
+      installCalls.push(packageName);
+      return { installed: true, message: `Installed ${packageName}.` };
+    },
+  });
+
+  assert.equal(result.exitCode, 0, result.stderr.join('\n'));
+  assert.deepEqual(installCalls, ['@ts-typed/nestjs']);
+  assert.match(result.stdout.join('\n'), /Installed @ts-typed\/nestjs/);
 });

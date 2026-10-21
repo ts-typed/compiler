@@ -8,8 +8,11 @@ import type { ConfigOverrides } from '../config';
 import {
   ConfigError,
   configureNestProjectScripts,
+  configureProjectScripts,
   detectProjectKind,
   initializeProject,
+  installDependency as installDependencyImpl,
+  isDependencyInstalled,
   loadConfig,
 } from '../config';
 import { loadIntegration } from '../integration';
@@ -46,6 +49,8 @@ const HELP_TEXT = [
 export interface RunCliOptions {
   /** Provided by the executable only when it has an interactive terminal. */
   readonly confirm?: (question: string) => Promise<boolean>;
+  /** Test-only seam for Task 6's tests; production code never passes this. */
+  readonly installDependency?: typeof installDependencyImpl;
 }
 
 export async function runCli(
@@ -88,50 +93,68 @@ async function runInit(args: readonly string[], options: RunCliOptions): Promise
   }
 
   try {
-    const projectKind = await detectProjectKind(parsed.root);
-    const isNestProject = projectKind === 'nest';
-    const nestAdapter = isNestProject ? tryLoadNestIntegration(parsed.root) : undefined;
-    const result = await initializeProject(parsed.root, {
-      ...(nestAdapter === undefined ? {} : { integration: '@ts-typed/nestjs' }),
-    });
-    const stdout = [result.created
-      ? `Created ${result.configPath}`
-      : `Configuration already exists at ${result.configPath}`];
+    const install = options.installDependency ?? installDependencyImpl;
+    const kind = await detectProjectKind(parsed.root);
+    const integrationPackage = kind === 'nest' ? '@ts-typed/nestjs' : kind === 'express' ? '@ts-typed/express' : undefined;
 
-    if (!isNestProject) {
-      stdout.push(
-        'Suggested package.json scripts:',
-        ...result.suggestedScripts.map((script) => `  ${script}`),
-      );
+    const stdout: string[] = [];
+    if (integrationPackage !== undefined) {
+      const installResult = await install(parsed.root, integrationPackage);
+      stdout.push(installResult.message);
     }
 
-    if (isNestProject) {
+    const adapter = integrationPackage === undefined ? undefined : tryLoadIntegration(integrationPackage, parsed.root);
+    const result = await initializeProject(parsed.root, {
+      ...(adapter === undefined ? {} : { integration: integrationPackage }),
+    });
+    stdout.push(result.created
+      ? `Created ${result.configPath}`
+      : `Configuration already exists at ${result.configPath}`);
+
+    if (kind === 'nest') {
       const scripts = await configureNestProjectScripts(parsed.root);
       stdout.push(scripts.message);
-      const installFilter = nestAdapter?.installGlobalStrictTypeErrorFilter;
+    } else {
+      const scripts = await configureProjectScripts(parsed.root);
+      stdout.push(scripts.message);
+    }
+
+    if (kind === 'nest' || kind === 'express') {
+      const installFilter = adapter?.installGlobalStrictTypeErrorFilter;
       if (installFilter === undefined) {
-        stdout.push('NestJS detected, but @ts-typed/nestjs is unavailable; global filter was not configured.');
+        stdout.push(`${kind === 'nest' ? 'NestJS' : 'Express'} detected, but ${integrationPackage} is unavailable; global error handling was not configured.`);
       } else if (options.confirm !== undefined) {
-        const accepted = await options.confirm(
-          'NestJS detected. Register StrictTypeErrorFilter globally to return HTTP 400 errors? [y/N] ',
-        );
+        const label = kind === 'nest' ? 'StrictTypeErrorFilter' : 'the global error handler';
+        const accepted = await options.confirm(`Register ${label} globally to return safe HTTP responses? [y/N] `);
         if (accepted) {
           const setup = installFilter({ projectRoot: parsed.root });
           stdout.push(setup.message);
         } else {
-          stdout.push('Global StrictTypeErrorFilter was not registered.');
+          stdout.push(`Global ${label} was not registered.`);
         }
       }
     }
+
+    if (options.confirm !== undefined) {
+      const alreadyInstalled = await isDependencyInstalled(parsed.root, '@ts-typed/validators');
+      if (!alreadyInstalled) {
+        const wantsValidators = await options.confirm('Install @ts-typed/validators too? [y/N] ');
+        if (wantsValidators) {
+          const installResult = await install(parsed.root, '@ts-typed/validators');
+          stdout.push(installResult.message);
+        }
+      }
+    }
+
     return { exitCode: EXIT_SUCCESS, stdout, stderr: [] };
   } catch (error: unknown) {
     return { exitCode: EXIT_FAILURE, stdout: [], stderr: [describeError(error)] };
   }
 }
 
-function tryLoadNestIntegration(root: string) {
+function tryLoadIntegration(specifier: string, root: string) {
   try {
-    return loadIntegration('@ts-typed/nestjs', root);
+    return loadIntegration(specifier, root);
   } catch {
     return undefined;
   }
