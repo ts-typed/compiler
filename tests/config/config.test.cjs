@@ -7,6 +7,7 @@ const test = require('node:test');
 const {
   ConfigError,
   DEFAULT_CONFIG,
+  configureProjectScripts,
   detectProjectKind,
   initializeProject,
   loadConfig,
@@ -505,4 +506,60 @@ test('detectProjectKind falls back to typescript when package.json is invalid JS
   fs.writeFileSync(path.join(root, 'package.json'), '{ not json');
 
   assert.equal(await detectProjectKind(root), 'typescript');
+});
+
+test('configureProjectScripts fills in the four standard scripts when package.json has none of them', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ts-typed-scripts-empty-'));
+  fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ name: 'demo', scripts: { lint: 'eslint .' } }));
+
+  const result = await configureProjectScripts(root);
+
+  assert.equal(result.changed, true);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).scripts, {
+    lint: 'eslint .',
+    build: 'ts-typed build',
+    start: 'ts-typed start',
+    dev: 'ts-typed start --watch',
+    'start:prod': 'node dist/index.js',
+  });
+});
+
+test('configureProjectScripts never overwrites an existing script, even a custom one with the same name', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ts-typed-scripts-custom-'));
+  fs.writeFileSync(
+    path.join(root, 'package.json'),
+    JSON.stringify({ scripts: { build: 'my-custom-build.sh', start: 'node server.js' } }),
+  );
+
+  const result = await configureProjectScripts(root);
+
+  assert.equal(result.changed, true);
+  const scripts = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).scripts;
+  assert.equal(scripts.build, 'my-custom-build.sh');
+  assert.equal(scripts.start, 'node server.js');
+  assert.equal(scripts.dev, 'ts-typed start --watch');
+  assert.equal(scripts['start:prod'], 'node dist/index.js');
+});
+
+test('configureProjectScripts reports no change when all four scripts already exist', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ts-typed-scripts-complete-'));
+  fs.writeFileSync(
+    path.join(root, 'package.json'),
+    JSON.stringify({
+      scripts: { build: 'ts-typed build', start: 'ts-typed start', dev: 'ts-typed start --watch', 'start:prod': 'node dist/index.js' },
+    }),
+  );
+
+  const result = await configureProjectScripts(root);
+
+  assert.equal(result.changed, false);
+});
+
+test('configureProjectScripts reports a clear message and does not throw when package.json is missing', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ts-typed-scripts-missing-'));
+
+  const result = await configureProjectScripts(root);
+
+  assert.equal(result.changed, false);
+  assert.match(result.message, /Could not find package\.json/);
 });
