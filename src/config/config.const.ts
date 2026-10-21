@@ -1,6 +1,6 @@
 import type { ProjectConfig } from './config.interface';
 export const DEFAULT_CONFIG: ProjectConfig = {
-  $schema: './node_modules/@ts-typed/compiler/schema.json',
+  $schema: './node_modules/@ts-typed/core/schema.json',
   integration: 'typescript',
   extends: null,
   entry: 'src/main.ts',

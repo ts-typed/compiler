@@ -18,7 +18,7 @@ function isValueObjectRuntimePath(fileName: string): boolean {
   if (normalized.endsWith('/runtime/value-object.class.ts')) {
     return true;
   }
-  return normalized.endsWith('/runtime/value-object.class.d.ts') && normalized.includes('/@ts-typed/compiler/');
+  return normalized.endsWith('/runtime/value-object.class.d.ts') && normalized.includes('/@ts-typed/core/');
 }
 
 /**
@@ -33,7 +33,7 @@ function isAggregateErrorsRuntimePath(fileName: string): boolean {
   }
   return (
     normalized.endsWith('/runtime/aggregate-errors.decorator.d.ts') &&
-    normalized.includes('/@ts-typed/compiler/')
+    normalized.includes('/@ts-typed/core/')
   );
 }
 
@@ -933,7 +933,7 @@ export class TypeSchemaResolver {
    * trusted: a user class named `ValueObject` must not match. The declaration
    * must be a class in this package's runtime file. This package's own source
    * (`runtime/value-object.class.ts`) or its installed declaration
-   * (`runtime/value-object.class.d.ts` under `@ts-typed/compiler/`) both match.
+   * (`runtime/value-object.class.d.ts` under `@ts-typed/core/`) both match.
    * This is a path heuristic, not a full package-identity check.
    */
   private _isValueObjectBase(baseType: ts.Type): boolean {

@@ -6,7 +6,7 @@ import type { ContractTransformerOptions } from './contract-transformer-options.
 import { createSchemaExpression } from './schema-expression';
 import { rewriteAliasedSpecifier } from './resolve-path-alias';
 
-const DEFAULT_RUNTIME_MODULE = '@ts-typed/compiler';
+const DEFAULT_RUNTIME_MODULE = '@ts-typed/core';
 const LEGACY_RUNTIME_MODULE = 'ts-typed';
 const UNSUPPORTED_SYNTAX_CODE = 'TT_UNSUPPORTED_SYNTAX';
 

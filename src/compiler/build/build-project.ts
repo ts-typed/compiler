@@ -16,7 +16,7 @@ import { formatBuildMetrics, isBuildMetricsEnabled, now } from './build-metrics'
 import type { BuildStageMetrics } from './build-metrics';
 import type { BuildAssetReport, BuildReport } from './build-report.interface';
 
-const RUNTIME_PACKAGE = '@ts-typed/compiler';
+const RUNTIME_PACKAGE = '@ts-typed/core';
 
 interface EmitFileRecord {
   readonly relativePath: string;

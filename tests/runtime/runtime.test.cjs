@@ -3,7 +3,7 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 
-const packageRuntime = require('@ts-typed/compiler');
+const packageRuntime = require('@ts-typed/core');
 const runtime = require('../../dist/runtime');
 
 const context = {

@@ -10,7 +10,7 @@ const test = require('node:test');
 const { analyzeProject } = require('../../../dist/compiler/analysis');
 const { createContractTransformer } = require('../../../dist/compiler/transform');
 
-// The package root, linked into each fixture as `@ts-typed/compiler` so the
+// The package root, linked into each fixture as `@ts-typed/core` so the
 // emitted runtime import resolves exactly as it would in a consumer project.
 const packageRoot = resolve(__dirname, '../../..');
 
@@ -19,7 +19,7 @@ function writeProject({ module, moduleResolution, files, packageType }) {
   const sourceRoot = join(projectRoot, 'src');
   mkdirSync(sourceRoot, { recursive: true });
   mkdirSync(join(projectRoot, 'node_modules', '@ts-typed'), { recursive: true });
-  symlinkSync(packageRoot, join(projectRoot, 'node_modules', '@ts-typed', 'compiler'), 'dir');
+  symlinkSync(packageRoot, join(projectRoot, 'node_modules', '@ts-typed', 'core'), 'dir');
   writeFileSync(
     join(projectRoot, 'tsconfig.json'),
     JSON.stringify({
@@ -80,7 +80,7 @@ test('ESNext output injects a real import for the runtime and still validates co
       packageType: 'module',
       files: {
         'main.ts': [
-          "import { StrictTypeError } from '@ts-typed/compiler';",
+          "import { StrictTypeError } from '@ts-typed/core';",
           'export interface IUser { name: string; age: number; }',
           'const failures: string[] = [];',
           'function expectTypeError(name: string, action: () => void): void {',
@@ -103,7 +103,7 @@ test('ESNext output injects a real import for the runtime and still validates co
   );
 
   const emitted = readFileSync(join(project.outputRoot, 'main.js'), 'utf8');
-  assert.match(emitted, /^import \* as __tsTypedRuntime\w* from ['"]@ts-typed\/compiler['"];?$/m);
+  assert.match(emitted, /^import \* as __tsTypedRuntime\w* from ['"]@ts-typed\/core['"];?$/m);
   assert.doesNotMatch(emitted, /\brequire\(/);
 
   const result = runEntry(project);
@@ -136,7 +136,7 @@ test('CommonJS output keeps the require-based runtime binding for script files',
   );
 
   const emitted = readFileSync(join(project.outputRoot, 'main.js'), 'utf8');
-  assert.match(emitted, /const __tsTypedRuntime\w* = require\(["']@ts-typed\/compiler["']\);/);
+  assert.match(emitted, /const __tsTypedRuntime\w* = require\(["']@ts-typed\/core["']\);/);
   assert.doesNotMatch(emitted, /^import \* as /m);
 
   const result = runEntry(project);

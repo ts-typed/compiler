@@ -17,7 +17,7 @@ function writeProject(source, { extraFiles = {} } = {}) {
   const nodeModulesRoot = join(projectRoot, 'node_modules', '@ts-typed');
   mkdirSync(sourceRoot, { recursive: true });
   mkdirSync(nodeModulesRoot, { recursive: true });
-  symlinkSync(PACKAGE_DIST, join(nodeModulesRoot, 'compiler'), 'dir');
+  symlinkSync(PACKAGE_DIST, join(nodeModulesRoot, 'core'), 'dir');
 
   writeFileSync(
     join(sourceRoot, 'globals.d.ts'),
@@ -51,7 +51,7 @@ function writeProject(source, { extraFiles = {} } = {}) {
 
 function baseConfig(projectRoot, overrides = {}) {
   return {
-    $schema: './node_modules/@ts-typed/compiler/schema.json',
+    $schema: './node_modules/@ts-typed/core/schema.json',
     integration: 'typescript',
     extends: null,
     entry: join(projectRoot, 'src/main.ts'),
@@ -87,7 +87,7 @@ function runEntry(outDir, relativePath = 'main.js') {
 }
 
 const MAIN_SOURCE = [
-  "import { StrictTypeError } from '@ts-typed/compiler';",
+  "import { StrictTypeError } from '@ts-typed/core';",
   'interface IUser { name: string; age: number; }',
   'function expectTypeError(action: () => void): void {',
   '  try { action(); } catch (error) { if (error instanceof StrictTypeError) return; throw error; }',
@@ -278,7 +278,7 @@ test('TS_TYPED_BUILD_METRICS=1 attaches per-stage timing to the report and print
 });
 
 const DECORATED_SOURCE = [
-  "import { StrictTypeError } from '@ts-typed/compiler';",
+  "import { StrictTypeError } from '@ts-typed/core';",
   'function tag(target: object, key: string): void { void target; void key; }',
   'class Person { @tag name = "Ada"; }',
   'const person: Person = new Person();',
@@ -303,7 +303,7 @@ test('a decorated field with a supported type produces no unsupported warning', 
 // callable are now both supported leaves) still fails under onUnsupported=error, so decorators did not
 // silently disable the check.
 const DECORATED_UNSUPPORTED_SOURCE = [
-  "import { StrictTypeError } from '@ts-typed/compiler';",
+  "import { StrictTypeError } from '@ts-typed/core';",
   'function tag(target: object, key: string): void { void target; void key; }',
   'class Event<T> { @tag when: T; constructor(when: T) { this.when = when; } }',
   'const event: Event<number> = new Event(0);',

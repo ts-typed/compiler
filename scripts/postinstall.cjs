@@ -3,7 +3,7 @@
 const { existsSync, readFileSync } = require('node:fs');
 const { resolve } = require('node:path');
 
-const PACKAGE_NAME = '@ts-typed/compiler';
+const PACKAGE_NAME = '@ts-typed/core';
 
 function hasOwnDependency(packageJson) {
   const groups = [

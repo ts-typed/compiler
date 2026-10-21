@@ -19,7 +19,7 @@ function writeConsumerProject() {
   const nodeModulesRoot = join(projectRoot, 'node_modules', '@ts-typed');
   mkdirSync(sourceRoot, { recursive: true });
   mkdirSync(nodeModulesRoot, { recursive: true });
-  symlinkSync(PACKAGE_DIST, join(nodeModulesRoot, 'compiler'), 'dir');
+  symlinkSync(PACKAGE_DIST, join(nodeModulesRoot, 'core'), 'dir');
 
   writeFileSync(
     join(sourceRoot, 'globals.d.ts'),
@@ -45,7 +45,7 @@ function writeConsumerProject() {
   writeFileSync(
     join(sourceRoot, 'main.ts'),
     [
-      "import { StrictTypeError } from '@ts-typed/compiler';",
+      "import { StrictTypeError } from '@ts-typed/core';",
       'const value: number = 1;',
       'try { const invalid: any = "bad"; const n: number = invalid; void n; }',
       'catch (error) { if (!(error instanceof StrictTypeError)) throw error; }',
@@ -57,7 +57,7 @@ function writeConsumerProject() {
   writeFileSync(
     configPath,
     JSON.stringify({
-      $schema: './node_modules/@ts-typed/compiler/schema.json',
+      $schema: './node_modules/@ts-typed/core/schema.json',
       integration: 'typescript',
       extends: null,
       entry: 'src/main.ts',

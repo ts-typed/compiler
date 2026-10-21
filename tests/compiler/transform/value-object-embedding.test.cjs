@@ -14,14 +14,14 @@ const runtimeModule = join(__dirname, '../../../dist/runtime');
 const runtimeIndex = join(runtimeModule, 'index.js');
 
 // The ValueObject declaration is installed the way a consumer would have it:
-// node_modules/@ts-typed/compiler/dist/runtime/value-object.class.d.ts. The
+// node_modules/@ts-typed/core/dist/runtime/value-object.class.d.ts. The
 // runtime itself resolves to this repository's built dist, so the class
 // identity the transformer and the fixture see is the same.
 function emitProject(files, { esm = false } = {}) {
   const projectRoot = mkdtempSync(join(tmpdir(), 'ts-typed-value-object-'));
   const sourceRoot = join(projectRoot, 'src');
   const tsTypedRoot = join(projectRoot, 'node_modules', 'ts-typed');
-  const compilerRoot = join(projectRoot, 'node_modules', '@ts-typed', 'compiler');
+  const compilerRoot = join(projectRoot, 'node_modules', '@ts-typed', 'core');
   mkdirSync(sourceRoot, { recursive: true });
   mkdirSync(tsTypedRoot, { recursive: true });
   mkdirSync(join(compilerRoot, 'dist', 'runtime'), { recursive: true });
@@ -42,11 +42,11 @@ function emitProject(files, { esm = false } = {}) {
     JSON.stringify(
       esm
         ? {
-          name: '@ts-typed/compiler',
+          name: '@ts-typed/core',
           type: 'commonjs',
           exports: { '.': { types: './dist/index.d.ts', import: './dist/index.mjs' } },
         }
-        : { name: '@ts-typed/compiler', main: 'dist/index.js', types: 'dist/index.d.ts' },
+        : { name: '@ts-typed/core', main: 'dist/index.js', types: 'dist/index.d.ts' },
     ),
   );
   if (esm) {
@@ -137,7 +137,7 @@ function emitProject(files, { esm = false } = {}) {
 }
 
 const VALUE_OBJECTS = [
-  "import { ValueObject } from '@ts-typed/compiler';",
+  "import { ValueObject } from '@ts-typed/core';",
   'export class CPF extends ValueObject {',
   '  protected isValid(raw: string): boolean { return raw.length === 11; }',
   "  public masked(): string { return '***' + this.toString().slice(-2); }",
@@ -290,7 +290,7 @@ test('an ordinary class with compiler.strictClass still enforces nominal instanc
 
 test('a ValueObject class declared in the same file is embedded and deferred past its declaration', () => {
   const out = runApp([
-    "import { ValueObject } from '@ts-typed/compiler';",
+    "import { ValueObject } from '@ts-typed/core';",
     'function takeLocal(value: Local): string { return value.label(); }',
     'class Local extends ValueObject {',
     "  protected isValid(raw: string): boolean { return raw.startsWith('L'); }",

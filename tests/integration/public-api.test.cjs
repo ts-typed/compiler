@@ -2,14 +2,14 @@
 
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const integration = require('@ts-typed/compiler');
-const integrationSubpath = require('@ts-typed/compiler/integration');
+const integration = require('@ts-typed/core');
+const integrationSubpath = require('@ts-typed/core/integration');
 
 const projectContext = { projectRoot: __dirname };
 
 test('exposes its own package.json through the exports map', () => {
-  const manifest = require('@ts-typed/compiler/package.json');
-  assert.equal(manifest.name, '@ts-typed/compiler');
+  const manifest = require('@ts-typed/core/package.json');
+  assert.equal(manifest.name, '@ts-typed/core');
 });
 
 test('exports the versioned API from the package root and subpath', () => {

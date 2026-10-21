@@ -15,17 +15,17 @@ const runtimeIndex = join(runtimeModule, 'index.js');
 
 // The `@AggregateErrors()` decorator's provenance check (mirroring the
 // ValueObject one in value-object-embedding.test.cjs) requires its
-// declaration to live under a `.../@ts-typed/compiler/.../runtime/
+// declaration to live under a `.../@ts-typed/core/.../runtime/
 // aggregate-errors.decorator.d.ts` path, the same way a real installed copy
 // of this package would be laid out. The friendlier `ts-typed` package only
 // re-exports the error classes used for type-checking the fixture; the
-// decorator itself is imported straight from `@ts-typed/compiler`, same as
+// decorator itself is imported straight from `@ts-typed/core`, same as
 // `ValueObject` is in the value-object fixture.
 function writeProject(files) {
   const projectRoot = mkdtempSync(join(tmpdir(), 'ts-typed-aggregate-errors-'));
   const sourceRoot = join(projectRoot, 'src');
   const tsTypedRoot = join(projectRoot, 'node_modules', 'ts-typed');
-  const compilerRoot = join(projectRoot, 'node_modules', '@ts-typed', 'compiler');
+  const compilerRoot = join(projectRoot, 'node_modules', '@ts-typed', 'core');
   mkdirSync(sourceRoot, { recursive: true });
   mkdirSync(tsTypedRoot, { recursive: true });
   mkdirSync(join(compilerRoot, 'dist', 'runtime'), { recursive: true });
@@ -41,7 +41,7 @@ function writeProject(files) {
   );
   writeFileSync(
     join(compilerRoot, 'package.json'),
-    JSON.stringify({ name: '@ts-typed/compiler', main: 'dist/index.js', types: 'dist/index.d.ts' }),
+    JSON.stringify({ name: '@ts-typed/core', main: 'dist/index.js', types: 'dist/index.d.ts' }),
   );
   writeFileSync(
     join(compilerRoot, 'dist', 'index.js'),
@@ -124,7 +124,7 @@ function runMain(files) {
 test('a plain object literal (never instantiated) crossing a parameter typed by a cross-file @AggregateErrors() DTO is fully aggregated', () => {
   const result = runMain({
     'dto.ts': [
-      "import { AggregateErrors } from '@ts-typed/compiler';",
+      "import { AggregateErrors } from '@ts-typed/core';",
       '',
       '@AggregateErrors()',
       'export class CreateUserDto {',
@@ -231,7 +231,7 @@ test('a locally-defined, unrelated same-named AggregateErrors() decorator does n
 test('a subclass of an @AggregateErrors() DTO is detected through the base-class chain', () => {
   const result = runMain({
     'dto.ts': [
-      "import { AggregateErrors } from '@ts-typed/compiler';",
+      "import { AggregateErrors } from '@ts-typed/core';",
       '',
       '@AggregateErrors()',
       'export class BaseDto {',
@@ -272,7 +272,7 @@ test('a subclass of an @AggregateErrors() DTO is detected through the base-class
 test('a generic @AggregateErrors() DTO instantiated as a parameter type is detected (TypeReference unwrap)', () => {
   const result = runMain({
     'dto.ts': [
-      "import { AggregateErrors } from '@ts-typed/compiler';",
+      "import { AggregateErrors } from '@ts-typed/core';",
       '',
       '@AggregateErrors()',
       'export class GenericDto<T> {',
@@ -310,7 +310,7 @@ test('a generic @AggregateErrors() DTO instantiated as a parameter type is detec
 test('a subclass of a generic @AggregateErrors() base, instantiated as a parameter type, is detected through the base-class chain', () => {
   const result = runMain({
     'dto.ts': [
-      "import { AggregateErrors } from '@ts-typed/compiler';",
+      "import { AggregateErrors } from '@ts-typed/core';",
       '',
       '@AggregateErrors()',
       'export class GenericBaseDto<T> {',
@@ -351,7 +351,7 @@ test('a subclass of a generic @AggregateErrors() base, instantiated as a paramet
 test('a plainToInstance-style population (construct, then assign each field separately) now aggregates, once the populated instance crosses a real parameter boundary', () => {
   const result = runMain({
     'dto.ts': [
-      "import { AggregateErrors } from '@ts-typed/compiler';",
+      "import { AggregateErrors } from '@ts-typed/core';",
       '',
       '@AggregateErrors()',
       'export class CreateUserDto {',
@@ -406,7 +406,7 @@ test('a plainToInstance-style population (construct, then assign each field sepa
 test('the same plainToInstance-style population also reports a field that was never assigned at all (stays at its required-but-missing gap) once the schema declares a third required field not present at all in this scenario', () => {
   const result = runMain({
     'dto.ts': [
-      "import { AggregateErrors } from '@ts-typed/compiler';",
+      "import { AggregateErrors } from '@ts-typed/core';",
       '',
       '@AggregateErrors()',
       'export class CreateUserDto {',
@@ -457,7 +457,7 @@ test('the same plainToInstance-style population also reports a field that was ne
 test('a bad nested @AggregateErrors() child is never silently accepted inside an @AggregateErrors() parent', () => {
   const result = runMain({
     'dto.ts': [
-      "import { AggregateErrors } from '@ts-typed/compiler';", '',
+      "import { AggregateErrors } from '@ts-typed/core';", '',
       '@AggregateErrors()', 'export class Profile {', "  bio: string = '';", '  age: number = 0;', '}', '',
       '@AggregateErrors()', 'export class CreateUserDto {', "  name: string = '';", '  profile: Profile = new Profile();', '}',
     ].join('\n'),
@@ -481,7 +481,7 @@ test('a bad nested @AggregateErrors() child is never silently accepted inside an
 test('a bad nested @AggregateErrors() child is never silently accepted inside an undecorated parent', () => {
   const result = runMain({
     'dto.ts': [
-      "import { AggregateErrors } from '@ts-typed/compiler';", '',
+      "import { AggregateErrors } from '@ts-typed/core';", '',
       '@AggregateErrors()', 'export class Profile {', "  bio: string = '';", '  age: number = 0;', '}', '',
       'export class CreateUserDto {', "  name: string = '';", '  profile: Profile = new Profile();', '}',
     ].join('\n'),
@@ -505,7 +505,7 @@ test('a bad nested @AggregateErrors() child is never silently accepted inside an
 test('an array of bad nested @AggregateErrors() items is never silently accepted', () => {
   const result = runMain({
     'dto.ts': [
-      "import { AggregateErrors } from '@ts-typed/compiler';", '',
+      "import { AggregateErrors } from '@ts-typed/core';", '',
       '@AggregateErrors()', 'export class Item {', "  label: string = '';", '}', '',
       '@AggregateErrors()', 'export class CreateOrderDto {', '  items: Item[] = [];', '}',
     ].join('\n'),
@@ -526,7 +526,7 @@ test('an array of bad nested @AggregateErrors() items is never silently accepted
 test('an array parameter of bad @AggregateErrors() instances is never silently accepted', () => {
   const result = runMain({
     'dto.ts': [
-      "import { AggregateErrors } from '@ts-typed/compiler';", '',
+      "import { AggregateErrors } from '@ts-typed/core';", '',
       '@AggregateErrors()', 'export class CreateUserDto {', "  name: string = '';", '  age: number = 0;', '}',
     ].join('\n'),
     'main.ts': [

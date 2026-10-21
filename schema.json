@@ -35,7 +35,7 @@
       "type": "string",
       "minLength": 1,
       "description": "JSON Schema path or URI.",
-      "default": "./node_modules/@ts-typed/compiler/schema.json"
+      "default": "./node_modules/@ts-typed/core/schema.json"
     },
     "integration": {
       "type": "string",

@@ -16,7 +16,7 @@ const {
 } = require('../../dist/config');
 
 test('exports the configuration API through the package subpath', () => {
-  const packageConfig = require('@ts-typed/compiler/config');
+  const packageConfig = require('@ts-typed/core/config');
 
   assert.strictEqual(packageConfig.ConfigError, ConfigError);
   assert.strictEqual(packageConfig.DEFAULT_CONFIG, DEFAULT_CONFIG);
@@ -178,13 +178,13 @@ test('resolves override paths from the loaded project configuration directory', 
 test('keeps schema URIs and package integration specifiers unchanged', async (t) => {
   const directory = createTemporaryDirectory(t);
   const projectFile = writeJson(directory, 'typets.config.json', {
-    $schema: './node_modules/@ts-typed/compiler/schema.json',
+    $schema: './node_modules/@ts-typed/core/schema.json',
     integration: '@scope/ts-typed-adapter',
   });
 
   const config = await loadConfig(projectFile);
 
-  assert.equal(config.$schema, './node_modules/@ts-typed/compiler/schema.json');
+  assert.equal(config.$schema, './node_modules/@ts-typed/core/schema.json');
   assert.equal(config.integration, '@scope/ts-typed-adapter');
 });
 
@@ -326,7 +326,7 @@ test('schema keys and defaults match the documented generated configuration', ()
     fs.readFileSync(path.join(__dirname, '../../schema.json'), 'utf8'),
   );
   const expectedDefaults = {
-    $schema: './node_modules/@ts-typed/compiler/schema.json',
+    $schema: './node_modules/@ts-typed/core/schema.json',
     integration: 'typescript',
     extends: null,
     entry: 'src/main.ts',
