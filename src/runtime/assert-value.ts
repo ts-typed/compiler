@@ -1,8 +1,11 @@
 import type { AssertionContext } from './assertion-context.interface';
 import { takeAggregateWindowViolations } from './aggregate-window';
+import { isExtraPropertiesAllowed } from './allow-extra-properties.decorator';
 import { SchemaRegistry } from './schema-registry.class';
 import { SchemaMetadataCache } from './schema-metadata-cache.class';
+import { isServerPopulated } from './server-populated.decorator';
 import { getClassValidationMode } from './strict-class.decorator';
+import { getTypeErrorResponse } from './type-error-response.decorator';
 import type {
   ArraySchema,
   IntersectionSchema,
@@ -287,8 +290,9 @@ function validateArray(
     return;
   }
 
+  const itemContext = stripNestedTypeErrorResponse(context);
   for (let index = 0; index < value.length; index += 1) {
-    validate(schema.items, value[index], context, `${path}[${index}]`, state);
+    validate(schema.items, value[index], itemContext, `${path}[${index}]`, state);
   }
 
   validateArrayOwnProperties(value, context, path, state);
@@ -316,13 +320,14 @@ function validateTuple(
     return;
   }
 
+  const itemContext = stripNestedTypeErrorResponse(context);
   for (let index = 0; index < schema.items.length; index += 1) {
-    validate(schema.items[index], value[index], context, `${path}[${index}]`, state);
+    validate(schema.items[index], value[index], itemContext, `${path}[${index}]`, state);
   }
 
   if (schema.rest !== undefined && schema.rest !== false) {
     for (let index = schema.items.length; index < value.length; index += 1) {
-      validate(schema.rest, value[index], context, `${path}[${index}]`, state);
+      validate(schema.rest, value[index], itemContext, `${path}[${index}]`, state);
     }
   }
 
@@ -345,10 +350,11 @@ function validateMap(
     return;
   }
 
+  const entryContext = stripNestedTypeErrorResponse(context);
   let index = 0;
   for (const [key, entryValue] of value) {
-    validate(schema.key, key, context, `${path}<${index}>.key`, state);
-    validate(schema.value, entryValue, context, `${path}<${index}>.value`, state);
+    validate(schema.key, key, entryContext, `${path}<${index}>.key`, state);
+    validate(schema.value, entryValue, entryContext, `${path}<${index}>.value`, state);
     index += 1;
   }
 }
@@ -365,9 +371,10 @@ function validateSet(
     return;
   }
 
+  const itemContext = stripNestedTypeErrorResponse(context);
   let index = 0;
   for (const item of value) {
-    validate(schema.item, item, context, `${path}[${index}]`, state);
+    validate(schema.item, item, itemContext, `${path}[${index}]`, state);
     index += 1;
   }
 }
@@ -404,6 +411,21 @@ function validateObject(
 
   const metadata = state.metadataCache.getObjectMetadata(schema);
   const declaredKeys = metadata.declaredKeys;
+  // `context` was prepared (TypeErrorResponse/AllowExtraProperties/
+  // isServerPopulated baked in) relative to whichever object started this
+  // `protectValue` call, which is only ever the TOP-level value. A nested
+  // class instance reached while walking the structure (a DTO field holding
+  // another decorated class, an array of entities, …) has its own decorator
+  // metadata that this recursive walk never consulted before reaching here —
+  // only the later protection-install pass in guards.ts did, which runs AFTER
+  // validation already succeeded or failed. Resolving it again for the
+  // actual nested owner keeps a violation several levels deep from being
+  // misclassified (a corrupted ServerPopulated() entity nested inside a
+  // plain DTO reporting as a 400, or a decorated field's TypeErrorResponse
+  // never being consulted on first contact with invalid input).
+  const ownerContext: AssertionContext = isServerPopulated(value)
+    ? { ...context, isServerPopulated: true }
+    : context;
 
   for (const key of declaredKeys) {
     const property = schema.properties[key];
@@ -411,7 +433,7 @@ function validateObject(
 
     if (!Reflect.has(value, key)) {
       if (property.optional !== true) {
-        report(state, context, propertyPath, 'required property', value, 'REQUIRED_PROPERTY');
+        report(state, ownerContext, propertyPath, 'required property', value, 'REQUIRED_PROPERTY');
       }
       continue;
     }
@@ -420,7 +442,8 @@ function validateObject(
     if (property.deferredAssignment === true && propertyValue === undefined) {
       continue;
     }
-    validate(property.schema, propertyValue, context, propertyPath, state);
+    const propertyContext = withNestedTypeErrorResponse(ownerContext, value, key);
+    validate(property.schema, propertyValue, propertyContext, propertyPath, state);
   }
 
   for (const key of Reflect.ownKeys(value)) {
@@ -430,14 +453,54 @@ function validateObject(
 
     const propertyPath = appendPropertyPath(path, key);
     if (schema.index !== undefined) {
-      validate(schema.index, Reflect.get(value, key), context, propertyPath, state);
+      validate(schema.index, Reflect.get(value, key), ownerContext, propertyPath, state);
       continue;
     }
 
-    if (schema.allowExtraProperties !== true && context.allowExtraPropertiesAll !== true) {
-      report(state, context, propertyPath, 'no extra properties', value, 'EXTRA_PROPERTY');
+    const allowedHere =
+      schema.allowExtraProperties === true ||
+      context.allowExtraPropertiesAll === true ||
+      isExtraPropertiesAllowed(value);
+    if (!allowedHere) {
+      report(state, ownerContext, propertyPath, 'no extra properties', value, 'EXTRA_PROPERTY');
     }
   }
+}
+
+/**
+ * Per-property TypeErrorResponse, resolved against the actual nested owner
+ * reached during the structural walk — mirrors `withTypeErrorResponse` in
+ * guards.ts (same strip-then-reapply rule: a decorated parent never
+ * customizes its nested children's own violations), kept local here because
+ * guards.ts already imports from this module and importing back would be
+ * circular.
+ */
+function withNestedTypeErrorResponse(
+  context: AssertionContext,
+  owner: object,
+  key: PropertyKey,
+): AssertionContext {
+  const { typeErrorResponseMessage: _inheritedMessage, typeErrorResponseStatus: _inheritedStatus, ...inherited } = context;
+  const response = getTypeErrorResponse(owner, typeof key === 'number' ? String(key) : key);
+  if (response === undefined) {
+    return inherited;
+  }
+  return {
+    ...inherited,
+    typeErrorResponseMessage: response.message,
+    ...(response.status === undefined ? {} : { typeErrorResponseStatus: response.status }),
+  };
+}
+
+/**
+ * Array/tuple items and Map/Set entries have no property key of their own to
+ * carry a `TypeErrorResponse`, so a decorated collection field's own response
+ * must not leak onto violations found inside its elements — same
+ * strip-without-reapplying half of {@link withNestedTypeErrorResponse}.
+ */
+function stripNestedTypeErrorResponse(context: AssertionContext): AssertionContext {
+  const { typeErrorResponseMessage: _inheritedMessage, typeErrorResponseStatus: _inheritedStatus, ...inherited } = context;
+  return inherited;
 }
 
 function validateArrayOwnProperties(

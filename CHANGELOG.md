@@ -4,6 +4,57 @@ All notable changes to `@ts-typed/compiler` are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.1.34] - 2026-10-21
+
+### Fixed
+
+- **`TypeErrorResponse()`, `isServerPopulated` and `AllowExtraProperties()` on a
+  nested class instance were only applied by the later protection-install
+  pass, never by the FIRST structural validation that runs when a value
+  crosses a typed boundary.** A `@Body() dto: UserDto` whose nested/own field
+  had a `TypeErrorResponse('message', status)` always reported the generic
+  400 with the raw type-mismatch message on the first violation — the custom
+  response only took effect on a later direct field write
+  (`dto.email = 123`), which real request bodies never go through. The same
+  gap applied to `ServerPopulated()` on an entity nested inside a plain,
+  undecorated parent (its violations incorrectly reported as client faults),
+  and to `AllowExtraProperties()` on a nested class instance (its own
+  permission was ignored, since only the top-level value's decorators were
+  consulted). `validateObject` in `assert-value.ts` now resolves all three
+  against the actual nested owner it is walking, not just the value
+  `protectValue` was first called with.
+- **A decorated collection field's `TypeErrorResponse` leaked onto violations
+  found inside its own array/tuple/Map/Set elements**, both during structural
+  validation and during later protection-install/mutation guarding — e.g. a
+  field `@TypeErrorResponse('Itens inválidos', 409) items: Item[]` turned
+  every violation inside `items[0]` into the same 409, even though an
+  element has no property key of its own to carry that response and the
+  documented rule is that a decorated parent does not customize its nested
+  children.
+
+### Known limitations (found during review, not fixed this round — both
+pre-date the recent perf work and need a deliberate design decision, not a
+quick patch)
+
+- **A value that already crossed one typed boundary keeps only that
+  boundary's contract.** `protectValue` recognizes a value it already wrapped
+  in a mutation-guard proxy (`mutationGuardProxies.has(array)`) and returns it
+  unchanged, so a SECOND `protectValue` call on the SAME array/object with a
+  DIFFERENT (stricter or looser) declared type is silently ignored — the
+  proxy still only enforces the FIRST contract. Fixing this properly needs
+  the array/Map/Set/object mutation guards to support multiple contracts per
+  value the way `DataPropertyGuardState.contracts` already does for class
+  fields, rather than a quick patch to the existing single-contract proxy
+  cache.
+- **`Object.create(protectedInstance)` can leak a write onto the prototype
+  instance itself**, visible to every other object sharing it as a
+  prototype. `guardOwnerOf`'s prototype-chain walk is required for normal
+  class-field inheritance (a subclass instance finding a guard installed by
+  an ancestor's constructor), but it cannot currently distinguish that case
+  from a plain object manually given an already-guarded instance as its OWN
+  prototype — a pattern `ts-typed`-compiled TypeScript does not itself
+  produce, but hand-written `Object.create` can.
+
 ## [0.1.33] - 2026-10-20
 
 ### Performance

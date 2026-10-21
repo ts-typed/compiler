@@ -496,11 +496,7 @@ function guardArrayMutations(
   const proxy = new Proxy(array, {
     set(target, property: string | symbol, nextValue: unknown): boolean {
       if (isArrayIndexKey(property)) {
-        const itemContext: AssertionContext = {
-          ...context,
-          propertyPath: `${context.propertyPath}[${property}]`,
-          operation: 'mutate',
-        };
+        const itemContext: AssertionContext = mutationEntryContext(context, `${context.propertyPath}[${property}]`);
         assertValue(items, nextValue, itemContext);
         installProtection(items, nextValue, itemContext, createProtectionState());
         const stored = wrapMutationValue(items, nextValue, itemContext);
@@ -663,7 +659,8 @@ function guardSetMutations(
 }
 
 function mutationEntryContext(context: AssertionContext, propertyPath: string): AssertionContext {
-  return { ...context, propertyPath, operation: 'mutate' };
+  const { typeErrorResponseMessage: _inheritedMessage, typeErrorResponseStatus: _inheritedStatus, ...inherited } = context;
+  return { ...inherited, propertyPath, operation: 'mutate' };
 }
 
 /**
@@ -791,11 +788,12 @@ function wrapNestedMapEntries(
   context: AssertionContext,
   session: MutationSession,
 ): void {
+  const { typeErrorResponseMessage: _inheritedMessage, typeErrorResponseStatus: _inheritedStatus, ...entryContext } = context;
   let index = 0;
   for (const [key, entryValue] of [...map]) {
-    const keyContext = { ...context, propertyPath: `${context.propertyPath}<${index}>.key` };
+    const keyContext = { ...entryContext, propertyPath: `${context.propertyPath}<${index}>.key` };
     wrapMutationValue(schema.key, key, keyContext, session);
-    const valueContext = { ...context, propertyPath: `${context.propertyPath}<${index}>.value` };
+    const valueContext = { ...entryContext, propertyPath: `${context.propertyPath}<${index}>.value` };
     const wrapped = wrapMutationValue(schema.value, entryValue, valueContext, session);
     if (wrapped !== entryValue) {
       map.set(key, wrapped);
@@ -1639,10 +1637,11 @@ function installMapEntryProtection(
   context: AssertionContext,
   state: ProtectionState,
 ): void {
+  const { typeErrorResponseMessage: _inheritedMessage, typeErrorResponseStatus: _inheritedStatus, ...entryContext } = context;
   let index = 0;
   for (const [key, entryValue] of value) {
-    installProtection(schema.key, key, { ...context, propertyPath: `${context.propertyPath}<${index}>.key` }, state);
-    installProtection(schema.value, entryValue, { ...context, propertyPath: `${context.propertyPath}<${index}>.value` }, state);
+    installProtection(schema.key, key, { ...entryContext, propertyPath: `${context.propertyPath}<${index}>.key` }, state);
+    installProtection(schema.value, entryValue, { ...entryContext, propertyPath: `${context.propertyPath}<${index}>.value` }, state);
     index += 1;
   }
 }
@@ -1988,7 +1987,12 @@ function indexedContext(
   context: AssertionContext,
   index: number,
 ): AssertionContext {
-  return { ...context, propertyPath: `${context.propertyPath}[${index}]` };
+  // An array/tuple/Set item has no property key of its own to carry a
+  // TypeErrorResponse, so a decorated collection field's own response must
+  // not leak onto violations found inside its elements (same rule
+  // `withTypeErrorResponse` enforces for object properties).
+  const { typeErrorResponseMessage: _inheritedMessage, typeErrorResponseStatus: _inheritedStatus, ...inherited } = context;
+  return { ...inherited, propertyPath: `${context.propertyPath}[${index}]` };
 }
 
 function isReferenceValue(value: unknown): value is object {

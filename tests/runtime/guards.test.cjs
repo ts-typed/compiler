@@ -360,6 +360,36 @@ test('property and class extra-property decorators are honored without opening k
   assert.equal(owner.profile.source, 'import');
 });
 
+test('TypeErrorResponse on a decorated array field does not leak into a later mutation violation on one of its items', () => {
+  class Item {}
+  const itemSchema = {
+    kind: 'object',
+    properties: { name: { schema: stringSchema } },
+  };
+  class Wrapper {}
+  runtime.TypeErrorResponse('Itens inválidos', 409)(Wrapper.prototype, 'items');
+  const wrapperSchema = {
+    kind: 'object',
+    properties: {
+      items: { schema: { kind: 'array', items: itemSchema } },
+    },
+  };
+  const item = Object.assign(new Item(), { name: 'Ada' });
+  const wrapper = Object.assign(new Wrapper(), { items: [item] });
+
+  guards.protectValue(wrapperSchema, wrapper, context);
+
+  assert.throws(
+    () => {
+      item.name = 42;
+    },
+    (error) =>
+      error instanceof runtime.StrictTypeError &&
+      error.typeErrorResponseMessage === undefined &&
+      error.typeErrorResponseStatus === undefined,
+  );
+});
+
 test('protectValue aggregates every violation for a parameter whose runtime value is an @AggregateErrors() instance', () => {
   class CreateUserDto {}
   runtime.AggregateErrors()(CreateUserDto);
