@@ -59,7 +59,16 @@ function isThirdPartyDeclaration(declarations: readonly ts.Declaration[]): boole
   }
   return declarations.every((declaration) => {
     const normalized = declaration.getSourceFile().fileName.replace(/\\/g, '/');
-    return normalized.includes('/node_modules/') && !normalized.includes('/node_modules/@ts-typed/');
+    // `type.getSymbol()` on a `Partial<T>`/`Pick<T, K>`/`Record<K, V>` etc.
+    // instantiation resolves to the generic utility type's OWN declaration in
+    // TypeScript's bundled lib (`node_modules/typescript/lib/lib.es5.d.ts`),
+    // not to any real third-party dependency; excluding that path keeps these
+    // mapped types closed/structural as before.
+    return (
+      normalized.includes('/node_modules/') &&
+      !normalized.includes('/node_modules/@ts-typed/') &&
+      !normalized.includes('/node_modules/typescript/lib/')
+    );
   });
 }
 
@@ -818,7 +827,11 @@ export class TypeSchemaResolver {
     }
 
     const hasIndex = indexResolution?.schema !== undefined;
-    const typeSymbol = type.aliasSymbol ?? type.getSymbol();
+    // Only the type's own symbol is checked, never `type.aliasSymbol`: for
+    // `Partial<IUser>`/`Pick<IUser, ...>`/`Record<...>` etc., the alias symbol
+    // is TypeScript's own built-in generic (declared in `node_modules/typescript/lib/*.d.ts`),
+    // which would wrongly look third-party and open up every mapped-type usage.
+    const typeSymbol = type.getSymbol();
     const isThirdParty =
       typeSymbol !== undefined && isThirdPartyDeclaration(typeSymbol.getDeclarations() ?? []);
     return {
